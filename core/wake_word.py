@@ -84,13 +84,17 @@ def install_and_download(logger: Callable[[str], None] = print) -> tuple[bool, s
                 tail = (r.stderr or r.stdout or "").strip().splitlines()[-1:] or [""]
                 return False, f"pip install failed: {tail[0][:160]}"
         # Download the pretrained melspectrogram/embedding + wake models.
-        logger("Wake word: downloading models…")
+        logger("Wake word: checking models…")
         try:
             import openwakeword.utils as _u
-            try:
-                _u.download_models([WAKE_MODEL])
-            except TypeError:
-                _u.download_models()   # older signature downloads the default set
+            if hasattr(_u, "download_models"):
+                try:
+                    _u.download_models([WAKE_MODEL])
+                except TypeError:
+                    _u.download_models()   # older signature downloads the default set
+            # Newer openwakeword releases bundle the models in the wheel and no
+            # longer expose download_models() — nothing to fetch, so fall through
+            # and let the is_ready() check below confirm them.
         except Exception as e:
             return False, f"model download failed: {e}"
 
@@ -128,7 +132,18 @@ class WakeWordDetector:
             return True
         try:
             from openwakeword.model import Model
-            self._model = Model(wakeword_models=[WAKE_MODEL], inference_framework="onnx")
+            try:
+                # Newer openwakeword releases bundle the models and take explicit
+                # file paths (wakeword_model_paths). Pick the wake model by name.
+                import openwakeword as _oww
+                paths = [p for p in _oww.get_pretrained_model_paths()
+                         if Path(p).stem.lower().startswith(WAKE_MODEL)]
+                if not paths:
+                    raise RuntimeError(f"no bundled model matching '{WAKE_MODEL}'")
+                self._model = Model(wakeword_model_paths=paths)
+            except (ImportError, AttributeError):
+                # Legacy releases: name-based API with a download step.
+                self._model = Model(wakeword_models=[WAKE_MODEL], inference_framework="onnx")
         except Exception as e:
             self._logger(f"Wake word: could not load model — {e}")
             self._model = None

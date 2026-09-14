@@ -1,0 +1,62 @@
+//@version=5
+strategy("EMA RSI Fibonacci Strategy", overlay=true, initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=100)
+
+// ----------------- Inputs ----------------- //
+// EMA Lengths
+shortEmaLen   = input.int(5, minval=1, title="Short EMA Length")
+longEmaLen    = input.int(39, minval=1, title="Long EMA Length")
+
+// RSI Configuration
+rsiLen        = input.int(14, minval=1, title="RSI Length")
+rsiOverbought = input.int(60, title="RSI Buy Level")
+rsiOversold   = input.int(40, title="RSI Sell Level")
+
+// Fibonacci Configuration (Lookback for Swing High/Low)
+fibLookback    = input.int(50, minval=1, title="Fibonacci Swing Lookback")
+
+// ----------------- Calculations ----------------- //
+// EMAs
+shortEma = ta.ema(close, shortEmaLen)
+longEma  = ta.ema(close, longEmaLen)
+
+// RSI
+rsiValue = ta.rsi(close, rsiLen)
+
+// Fibonacci Levels
+swingHigh = ta.highest(high, fibLookback)
+swingLow  = ta.lowest(low, fibLookback)
+fibRange  = swingHigh - swingLow
+
+// Golden Zone Levels
+fib618 = swingLow + (fibRange * 0.618)
+fib50  = swingLow + (fibRange * 0.50)
+
+// ----------------- Plots ----------------- //
+plot(shortEma, color=color.blue, title="Short EMA")
+plot(longEma,  color=color.red,  title="Long EMA")
+
+// Display Fibonacci Golden Zone levels with lines
+var line line50 = na
+var line line618 = na
+line.delete(line50)
+line.delete(line618)
+line50 := line.new(bar_index - fibLookback, fib50, bar_index, fib50, color=color.new(color.gold, 30), width=2)
+line618 := line.new(bar_index - fibLookback, fib618, bar_index, fib618, color=color.new(color.gold, 30), width=2)
+
+// ----------------- Conditions ----------------- //
+// EMA Crossover condition
+emaCrossOver  = ta.crossover(shortEma, longEma)
+emaCrossUnder = ta.crossunder(shortEma, longEma)
+
+// Long Conditions: Short EMA crosses over Long EMA, RSI > 60, PRICE crosses ABOVE Golden Zone (0.618)
+longConditions = emaCrossOver and rsiValue > rsiOverbought and ta.crossover(close, fib618)
+
+// Short Conditions: Short EMA crosses under Long EMA, RSI < 40, PRICE crosses BELOW Golden Zone (0.50)
+shortConditions = emaCrossUnder and rsiValue < rsiOversold and ta.crossunder(close, fib50)
+
+// Entry Logic based on conditions
+if (longConditions)
+    strategy.entry("Long", strategy.long, comment="L")
+
+if (shortConditions)
+    strategy.entry("Short", strategy.short, comment="S")

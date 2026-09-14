@@ -34,6 +34,13 @@ for _stream in (_sys.stdout, _sys.stderr):
     except Exception:
         pass
 
+# sounddevice 0.5.x sets .shape on NumPy arrays internally — deprecated in
+# NumPy 2.5 and re-emitted for EVERY audio callback, which spams megabytes of
+# identical warnings into the log within minutes. Harmless today; filter just
+# this message instead of silencing DeprecationWarnings globally.
+import warnings as _warnings
+_warnings.filterwarnings("ignore", message=".*Setting the shape on a NumPy array.*")
+
 import asyncio
 import re
 import threading
@@ -67,6 +74,7 @@ from actions.proactive         import ProactiveEngine
 from actions.background_monitor import (
     add_monitor, remove_monitor, list_monitors, check_all as monitor_check_all,
 )
+from actions.camera_watch       import CameraWatcher
 from actions.web_search        import _news as _fetch_news_sync
 from memory.config_manager     import (
     get_brief_enabled, get_voice, get_wake_word_enabled, save_wake_word_enabled,    get_input_device, get_output_device,
@@ -428,6 +436,7 @@ class JarvisLive:
         self._wake_enabled     = get_wake_word_enabled()
         self._awake            = not self._wake_enabled
         self._wake_detector: WakeWordDetector | None = None
+        self._cam_watcher    = CameraWatcher(logger=lambda m: print(f"[CameraWatch] {m}"))
         self._wake_sleep_timeout = WAKE_SLEEP_TIMEOUT
         # UI control surface for the Wake Word settings section.
         self.ui.wake_is_ready    = wake_is_ready          # () -> bool
@@ -1418,6 +1427,39 @@ class JarvisLive:
                         print(f"[Monitor] ⚠️ Background check error: {e}")
             await asyncio.sleep(1800)     # check every 30 minutes
 
+    # ── Camera watcher ───────────────────────────────────────────────────────
+
+    async def _run_camera_watch(self) -> None:
+        """Announce webcam connect/disconnect events as they happen.
+
+        CameraWatcher.watch_debounced() blocks in a worker thread until the
+        /dev/video* device list changes and settles, then returns short event
+        messages. Each is logged to the HUD and — when a session is live and
+        the assistant is awake — spoken through the Live session, like the
+        hardware-monitor and background-monitor alerts. When asleep, events
+        are still logged so nothing is lost silently.
+        """
+        while True:
+            try:
+                events = await asyncio.to_thread(self._cam_watcher.watch_debounced, 2.0)
+            except Exception as e:
+                print(f"[CameraWatch] ⚠️ watcher error: {e}")
+                await asyncio.sleep(5)
+                continue
+            if not events:
+                continue                    # watcher stopped — should not happen here; loop anyway
+            for msg in events:
+                self.ui.write_log(f"SYS: {msg}")
+                if self.session and self._awake:
+                    try:
+                        await self.session.send_client_content(
+                            turns={"role": "user",
+                                   "parts": [{"text": f"{msg}\n\nInform the user about this naturally in one short sentence."}]},
+                            turn_complete=True,
+                        )
+                    except Exception as e:
+                        print(f"[CameraWatch] ⚠️ announce failed: {e}")
+
     # ── Proactive mode ──────────────────────────────────────────────────────────
 
     async def _run_proactive_mode(self) -> None:
@@ -1617,6 +1659,7 @@ class JarvisLive:
                     tg.create_task(self._play_audio())
                     tg.create_task(self._run_system_monitor())
                     tg.create_task(self._run_background_monitor())
+                    tg.create_task(self._run_camera_watch())
                     tg.create_task(self._run_proactive_mode())
                     tg.create_task(self._run_sleep_watch())
                     if self._dashboard:

@@ -61,6 +61,19 @@ def _save_config_key(key: str, value) -> None:
         print(f"[Vision] ⚠️  Could not save config key '{key}': {e}")
 
 
+def _clear_config_key(key: str) -> None:
+    """Remove a config key. Used to un-cache a stale camera index so the next
+    capture re-runs detection instead of trusting a value that no longer works
+    (device unplugged, or a webcam added later at a different index)."""
+    try:
+        cfg = _load_config()
+        if key in cfg:
+            del cfg[key]
+            _CONFIG_PATH.write_text(json.dumps(cfg, indent=4), encoding="utf-8")
+    except Exception as e:
+        print(f"[Vision] ⚠️  Could not clear config key '{key}': {e}")
+
+
 def _get_os() -> str:
     return _load_config().get("os_system", "windows").lower()
 
@@ -139,8 +152,8 @@ def _detect_camera_index() -> int:
             return idx
         print(f"[Vision] ⚠️  Camera index {idx}: no usable frame")
 
-    print("[Vision] ⚠️  No camera found — defaulting to index 0")
-    _save_config_key("camera_index", 0)
+    print("[Vision] ⚠️  No camera found — clearing cached index so a later hot-plug is detected")
+    _clear_config_key("camera_index")
     return 0
 
 
@@ -160,7 +173,16 @@ def _capture_camera() -> tuple[bytes, str]:
     cap     = cv2.VideoCapture(index, backend)
 
     if not cap.isOpened():
-        raise RuntimeError(f"Camera index {index} could not be opened.")
+        # The cached index no longer works — the device was unplugged, or a
+        # webcam was added later at a different index. Re-scan once so a
+        # hot-plugged camera is picked up without a restart.
+        cap.release()
+        index = _detect_camera_index()
+        cap   = cv2.VideoCapture(index, backend)
+
+    if not cap.isOpened():
+        cap.release()
+        raise RuntimeError("No camera could be opened (cached index + full re-scan failed). Is a webcam connected?")
 
     for _ in range(10):
         cap.read()

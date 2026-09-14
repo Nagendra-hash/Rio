@@ -9,7 +9,9 @@ Playwright browsers needed for web automation (current-OS builds only).
 The optional local wake word ("Hey Jarvis") is NOT installed here — it's a
 one-click, opt-in download from ⚙ → WAKE WORD inside the app.
 """
+import os
 import platform
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -22,8 +24,50 @@ def _run(label: str, args: list[str]) -> None:
     subprocess.run(args, check=True)
 
 
+def _ensure_pip() -> None:
+    """Guarantee `python -m pip` works in the current interpreter.
+
+    Environments built by uv (`uv venv`) do not seed pip by default, so a bare
+    `python -m pip` fails with "No module named pip". Anything that later shells
+    out to `sys.executable -m pip` (e.g. the wake-word one-click installer in
+    core/wake_word.py) would fail the same way. bootstrap pip via ensurepip when
+    it is missing; if ensurepip is unavailable too (some distro builds strip it),
+    fall back to the uv shim (uv pip) when uv is on PATH.
+    """
+    probe = subprocess.run([sys.executable, "-m", "pip", "--version"],
+                           capture_output=True)
+    if probe.returncode == 0:
+        return   # pip already present — nothing to do
+
+    print("\n▶ Bootstrapping pip (missing in this environment)…")
+    r = subprocess.run([sys.executable, "-m", "ensurepip", "--upgrade"])
+    if r.returncode == 0:
+        return
+
+    # ensurepip unavailable (distro-stripped Python) — try the uv pip shim.
+    if shutil.which("uv"):
+        venv = os.environ.get("VIRTUAL_ENV")
+        if venv:
+            shim = Path(venv) / "bin" / "pip"
+            shim.write_text(
+                "#!/bin/sh\n"
+                "exec uv pip --python \"$VIRTUAL_ENV/bin/python\" \"$@\"\n"
+            )
+            shim.chmod(0o755)
+            print("   pip was missing — wrote a uv-backed pip shim into the venv.")
+            return
+
+    print("\n⚠️  Could not bootstrap pip automatically. Wake-word install and any"
+          "\n   'pip install <module>' fallbacks will need one of:\n"
+          "       python -m ensurepip --upgrade\n"
+          "       uv pip install …\n"
+          "       python -m venv --clear <dir>   (recreate with seeded pip)")
+
+
 def main() -> None:
     print(f"⚙  MARK LIII setup — detected OS: {OS or 'unknown'}")
+
+    _ensure_pip()
 
     # requirements.txt filters OS-specific extras by itself via pip markers.
     _run("Installing Python dependencies (OS-specific extras auto-filtered)…",
