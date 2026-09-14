@@ -472,6 +472,7 @@ class JarvisLive:
         if self._awake:
             return
         self._awake = True
+        print(f"[JARVIS] 👂 WAKE — {reason}")   # stdout proof: wake word fired
         self._last_user_speech = time.monotonic()   # start the auto-sleep clock now
         if not self.ui.muted:
             self.ui.set_state("LISTENING")

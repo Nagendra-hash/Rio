@@ -27,7 +27,11 @@ from typing import Callable
 # Pretrained openwakeword model that listens for "Hey Jarvis".
 WAKE_MODEL = "hey_jarvis"
 # Score in [0,1]; above this counts as a detection. Tunable per environment.
-DEFAULT_THRESHOLD = 0.5
+# 0.5 proved too strict on real laptop mics: measured peaks for a genuine
+# "Hey Jarvis" were 0.18-0.40 depending on gain (best at ~150%), while
+# background speech stays well under 0.1. 0.25 catches real phrases with
+# margin without firing on ordinary room noise.
+DEFAULT_THRESHOLD = 0.25
 # Mic frames arrive at 16 kHz int16; this is just the detector's input rate.
 SAMPLE_RATE = 16000
 
