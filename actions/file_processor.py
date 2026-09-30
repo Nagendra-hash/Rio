@@ -25,7 +25,7 @@ import tempfile
 from pathlib import Path
 from datetime import datetime
 
-# Model choice, timeout and fallback ladder all live in core/gemini.py (Mark-LIV).
+# Model choice, timeout and fallback ladder all live in core/gemini.py.
 from core import gemini
 
 def _get_api_key() -> str:

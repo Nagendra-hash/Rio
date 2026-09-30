@@ -16,8 +16,8 @@ API_CONFIG_PATH    = BASE_DIR / "config" / "api_keys.json"
 DESKTOP            = Path.home() / "Desktop"
 MAX_BUILD_ATTEMPTS = 3
 # Model choice lives in core/gemini.py, and so does the timeout and the
-# fallback ladder (Mark-LIV). Writing a model name here is what left this
-# file hanging forever whenever that one alias was unwell.
+# fallback ladder. Writing a model name here is what left this file hanging
+# forever whenever that one alias was unwell.
 from core import gemini
 
 

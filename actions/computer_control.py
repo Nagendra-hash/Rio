@@ -317,6 +317,7 @@ def _screen_find(description: str) -> tuple[int, int] | None:
         return None
 
     try:
+        from google import genai
         from google.genai import types as gtypes
 
         _require_pyautogui()
@@ -333,8 +334,6 @@ def _screen_find(description: str) -> tuple[int, int] | None:
             f"If the element is not visible, reply: NOT_FOUND"
         )
 
-        # Mark-LIV ladder: FAST tier + 20s deadline. The ladder accepts the
-        # SDK's Part objects directly, images included.
         from core import gemini
         response = gemini.call(
             [gtypes.Part.from_bytes(data=image_bytes, mime_type="image/png"), prompt],

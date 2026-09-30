@@ -9,8 +9,6 @@ from pathlib import Path
 from datetime import datetime
 from urllib.parse import quote_plus
 
-from typing import Any, Iterator
-
 try:
     import pyautogui
     _PYAUTOGUI = True
@@ -57,103 +55,6 @@ HEADERS = {
 }
 
 _YT_VIDEO_FILTER = "EgIQAQ%3D%3D"
-
-# Search-upload-date filter: "This week" + sort "View count" — the closest
-# public proxy for the trending feed (as of 2026-09 the /feed/trending page
-# serves an empty home shell with no video data to anonymous scrapers).
-_YT_TRENDING_FILTER = "CAMSBAgEEAE%3D"
-
-_JUNK_TITLES = {
-    "try searching to get started",
-    "keyboard shortcuts",
-    "playback",
-    "sign in to like videos, comment and subscribe",
-}
-
-
-def _iter_nodes(node: Any, key: str) -> Iterator[dict]:
-    """Yield every dict value stored under `key` anywhere in a nested JSON tree."""
-    if isinstance(node, dict):
-        for k, v in node.items():
-            if k == key and isinstance(v, dict):
-                yield v
-            else:
-                yield from _iter_nodes(v, key)
-    elif isinstance(node, list):
-        for item in node:
-            yield from _iter_nodes(item, key)
-
-
-def _runs_text(node: dict, field: str) -> str:
-    """Extract text from a renderer field shaped as {"runs": [{"text": ...}]} or {"simpleText": ...}."""
-    value = node.get(field)
-    if isinstance(value, dict):
-        if value.get("simpleText"):
-            return str(value["simpleText"])
-        runs = value.get("runs")
-        if isinstance(runs, list) and runs:
-            return "".join(str(r.get("text", "")) for r in runs if isinstance(r, dict))
-    return ""
-
-
-def _extract_videos_from_initial_data(data: dict) -> list[dict]:
-    """Pull videos out of a parsed ytInitialData tree via its videoRenderer nodes.
-
-    Walking the real JSON (instead of regexing raw HTML) means UI chrome —
-    'Keyboard shortcuts', empty-state text — can never be mistaken for a video.
-    """
-    results: list[dict] = []
-    seen: set[str] = set()
-    for renderer in _iter_nodes(data, "videoRenderer"):
-        video_id = renderer.get("videoId")
-        title = _runs_text(renderer, "title")
-        if not video_id or not title or video_id in seen:
-            continue
-        seen.add(video_id)
-        results.append({
-            "videoId": video_id,
-            "title": title,
-            "channel": _runs_text(renderer, "ownerText") or _runs_text(renderer, "longBylineText"),
-        })
-    return results
-
-
-def _parse_yt_initial_data(html: str) -> dict | None:
-    try:
-        match = re.search(r"var ytInitialData\s*=\s*(\{.+?\});</script>", html, re.S)
-        if not match:
-            return None
-        return json.loads(match.group(1))
-    except (ValueError, TypeError) as e:
-        print(f"[YouTube] ⚠️ ytInitialData parse failed: {e}")
-        return None
-
-
-def _scrape_trending_search(region: str, max_results: int) -> list[dict]:
-    """Trending proxy: most-viewed videos uploaded this week in `region`.
-
-    Region is best-effort: YouTube geolocates anonymous requests by IP, so
-    the gl parameter may be ignored (results follow the server's location).
-    Two attempts — a transient empty page has been observed in the wild.
-    """
-    if not _REQUESTS_OK:
-        return []
-    url = (
-        f"https://www.youtube.com/results"
-        f"?search_query=&sp={_YT_TRENDING_FILTER}"
-        f"&gl={region.upper()}"
-    )
-    for attempt in (1, 2):
-        try:
-            r    = requests.get(url, headers=HEADERS, timeout=12)
-            data = _parse_yt_initial_data(r.text)
-            if data:
-                videos = _extract_videos_from_initial_data(data)
-                if videos:
-                    return videos[:max_results]
-        except Exception as e:
-            print(f"[YouTube] ⚠️ Trending search fallback failed (attempt {attempt}): {e}")
-    return []
 
 
 def _get_api_key() -> str:
@@ -236,13 +137,7 @@ def _get_transcript(video_id: str) -> str | None:
     if not _TRANSCRIPT_OK:
         return None
     try:
-        # youtube-transcript-api 1.x renamed list_transcripts() → list(), made
-        # it an INSTANCE method (construct first), and made snippets objects
-        # with a .text attribute (pre-1.0: dicts). Support both versions.
-        if hasattr(YouTubeTranscriptApi, "list_transcripts"):
-            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)   # pre-1.0: static
-        else:
-            transcript_list = YouTubeTranscriptApi().list(video_id)             # 1.x: instance method
+        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
         transcript      = None
 
         lang_priority = ["en", "tr", "de", "fr", "es", "it", "pt", "ru", "ja", "ko", "ar", "zh"]
@@ -264,14 +159,7 @@ def _get_transcript(video_id: str) -> str | None:
             return None
 
         fetched = transcript.fetch()
-        texts = []
-        for entry in fetched:
-            t = getattr(entry, "text", None)
-            if t is None and isinstance(entry, dict):
-                t = entry.get("text")
-            if t:
-                texts.append(t)
-        return " ".join(texts)
+        return " ".join(entry["text"] for entry in fetched)
 
     except Exception as e:
         print(f"[YouTube] ⚠️ Transcript fetch failed: {e}")
@@ -280,13 +168,12 @@ def _get_transcript(video_id: str) -> str | None:
 
 def _summarize_with_gemini(transcript: str, video_url: str) -> str:
     from google.genai import types
+    from core import gemini
 
     max_chars = 80000
     truncated = transcript[:max_chars] + ("..." if len(transcript) > max_chars else "")
-    # Mark-LIV ladder: a whole transcript can be 80k characters, hence the
-    # long deadline — but a deadline there is, and the ladder in
-    # core/gemini.py picks the model.
-    from core import gemini
+    # A whole transcript can be 80k characters, hence the long deadline — but a
+    # deadline there is, and the ladder in core/gemini.py picks the model.
     response = gemini.call(
         f"Please summarize this YouTube video transcript:\n\n{truncated}",
         tier=gemini.SMART,
@@ -369,35 +256,30 @@ def _scrape_video_info(video_id: str) -> dict:
 
 
 def _scrape_trending(region: str = "TR", max_results: int = 8) -> list[dict]:
-    """Fetch trending videos for a region, with layered fallbacks.
-
-    Order: (1) /feed/trending ytInitialData — works when YouTube serves real
-    feed data again; (2) search proxy — most-viewed uploads this week. Videos
-    are only taken from parsed videoRenderer JSON, so page chrome can never
-    masquerade as a result.
-    """
     if not _REQUESTS_OK:
         return []
-    url = f"https://www.youtube.com/feed/trending?gl={region.upper()}&hl=en"
-    videos: list[dict] = []
+    url = f"https://www.youtube.com/feed/trending?gl={region.upper()}"
     try:
-        r      = requests.get(url, headers=HEADERS, timeout=12)
-        data   = _parse_yt_initial_data(r.text)
-        videos = _extract_videos_from_initial_data(data) if data else []
+        r    = requests.get(url, headers=HEADERS, timeout=12)
+        html = r.text
+
+        titles   = re.findall(r'"title":\{"runs":\[\{"text":"([^"]+)"\}\]', html)
+        channels = re.findall(r'"ownerText":\{"runs":\[\{"text":"([^"]+)"', html)
+
+        results, seen = [], set()
+        for i, title in enumerate(titles):
+            if title in seen or len(title) < 5:
+                continue
+            seen.add(title)
+            channel = channels[i] if i < len(channels) else "Unknown"
+            results.append({"rank": len(results) + 1, "title": title, "channel": channel})
+            if len(results) >= max_results:
+                break
+
+        return results
     except Exception as e:
-        print(f"[YouTube] ⚠️ Trending feed scrape failed: {e}")
-
-    if not videos:
-        print("[YouTube] ⚠️ Trending feed empty — falling back to search proxy")
-        videos = _scrape_trending_search(region, max_results)
-
-    # The blocklist guards BOTH tiers: page chrome must never be announced,
-    # no matter which page it leaked in from.
-    return [
-        {"rank": i + 1, "title": v["title"], "channel": v["channel"]}
-        for i, v in enumerate(videos[:max_results])
-        if v["title"].strip().lower() not in _JUNK_TITLES
-    ]
+        print(f"[YouTube] ⚠️ Trending scrape failed: {e}")
+        return []
 
 def _handle_play(parameters: dict, player) -> str:
     query = parameters.get("query", "").strip()
@@ -580,7 +462,7 @@ TOOL = {
             },
             "region": {
                 "type": "STRING",
-                "description": "Country code for trending e.g. TR, US (best-effort: YouTube geolocates anonymous requests by IP)"
+                "description": "Country code for trending e.g. TR, US"
             },
             "url": {
                 "type": "STRING",

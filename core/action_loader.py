@@ -39,6 +39,21 @@ _DEFAULT_PARAMS = {"type": "OBJECT", "properties": {}}
 _CTX_KEYS = ("player", "speak", "response", "session_memory", "dashboard")
 
 
+# A tool may declare that the model should NOT be held up waiting for it.
+# `behavior` goes to the API with the declaration; `scheduling` decides when the
+# eventual result is allowed back into the conversation:
+#   WHEN_IDLE  — wait for a gap in the speech (the sane default)
+#   SILENT     — record it, do not prompt a reply (the tool already announced)
+#   INTERRUPT  — cut in immediately (only when the answer cannot wait)
+_BEHAVIORS = ("BLOCKING", "NON_BLOCKING")
+_SCHEDULING = ("WHEN_IDLE", "SILENT", "INTERRUPT")
+
+
+def _opt_upper(value, allowed: tuple[str, ...]) -> Optional[str]:
+    v = str(value or "").strip().upper()
+    return v if v in allowed else None
+
+
 @dataclass
 class ActionRecord:
     name: str
@@ -48,6 +63,8 @@ class ActionRecord:
     file: str = ""
     valid: bool = False
     error: str = ""
+    behavior: Optional[str] = None     # None = the API's default (blocking)
+    scheduling: Optional[str] = None   # None = the API's default (WHEN_IDLE)
 
 
 class ActionRegistry:
@@ -58,13 +75,22 @@ class ActionRegistry:
 
     # -- called by main.py at LiveConnectConfig build time --
     def get_tool_declarations(self) -> list[dict]:
-        return [
-            {"name": rec.name, "description": rec.description, "parameters": rec.parameters}
-            for rec in self._actions.values()
-        ]
+        out = []
+        for rec in self._actions.values():
+            decl = {"name": rec.name, "description": rec.description,
+                    "parameters": rec.parameters}
+            if rec.behavior:
+                decl["behavior"] = rec.behavior
+            out.append(decl)
+        return out
 
     def has(self, name: str) -> bool:
         return name in self._actions
+
+    def scheduling(self, name: str) -> Optional[str]:
+        """How this action's result should re-enter the conversation, if it said."""
+        rec = self._actions.get(name)
+        return rec.scheduling if rec else None
 
     def names(self) -> set[str]:
         return set(self._actions.keys())
@@ -77,19 +103,6 @@ class ActionRegistry:
         try:
             return _call_handler(rec.handler, parameters, ctx or {}) or "Done."
         except Exception as e:
-            # Self-heal: a crash caused by a missing dependency (module not
-            # installed, import failing at call time) is fixed by installing
-            # it, reloading the action module and retrying ONCE.
-            diag, healed = _heal(str(e))
-            if healed:
-                new_handler = _rebind_handler(rec)
-                if new_handler is not None:
-                    self._logger(f"Self-heal: {diag} — retrying '{name}'")
-                    try:
-                        return _call_handler(new_handler, parameters, ctx or {}) or "Done."
-                    except Exception as e2:
-                        self._logger(f"Action '{name}' failed again after self-heal: {e2}")
-                        return f"Tool '{name}' failed: {e2}"
             self._logger(f"Action '{name}' crashed during run(): {e}")
             traceback.print_exc()
             return f"Tool '{name}' failed: {e}"
@@ -106,37 +119,6 @@ def _call_handler(fn: Callable, parameters: dict, ctx: dict) -> str:
         if has_var_kw or key in sig.parameters:
             kwargs[key] = ctx.get(key)
     return fn(parameters=parameters, **kwargs)
-
-
-def _heal(error_text: str) -> tuple[str, bool]:
-    """Self-heal hook: install whatever missing dependency the error names
-    (core/self_heal.py). Lazy import so action_loader keeps working even if
-    self_heal itself is broken. Never raises."""
-    try:
-        from core.self_heal import heal_from_error
-        return heal_from_error(error_text)
-    except Exception as e:
-        return f"self-heal unavailable: {e}", False
-
-
-def _rebind_handler(rec: "ActionRecord"):
-    """Reload the module an action came from and return its fresh handler —
-    used after a self-heal install so the retried call imports cleanly."""
-    try:
-        actions_dir = Path(__file__).resolve().parent.parent / "actions"
-        path = actions_dir / Path(rec.file).name
-        module_name = f"actions.{path.stem}"
-        sys.modules.pop(module_name, None)
-        spec = importlib.util.spec_from_file_location(module_name, path)
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
-        spec.loader.exec_module(module)
-        tool = getattr(module, "TOOL", None)
-        if isinstance(tool, dict) and callable(tool.get("handler")):
-            return tool["handler"]
-    except Exception:
-        traceback.print_exc()
-    return None
 
 
 def _validate(module, filename: str) -> ActionRecord:
@@ -167,7 +149,9 @@ def _validate(module, filename: str) -> ActionRecord:
                             error="TOOL['handler'] missing or not callable.")
 
     return ActionRecord(name=name, description=description.strip(), parameters=parameters,
-                        handler=handler, file=filename, valid=True, error="")
+                        handler=handler, file=filename, valid=True, error="",
+                        behavior=_opt_upper(tool.get("behavior"), _BEHAVIORS),
+                        scheduling=_opt_upper(tool.get("scheduling"), _SCHEDULING))
 
 
 def discover_actions(actions_dir: Path, reserved_names: set[str] | None = None,
@@ -201,20 +185,9 @@ def discover_actions(actions_dir: Path, reserved_names: set[str] | None = None,
                 sys.modules[module_name] = module
                 try:
                     spec.loader.exec_module(module)
-                except Exception as first_err:
+                except Exception:
                     sys.modules.pop(module_name, None)
-                    # Self-heal: a ModuleNotFoundError for a third-party lib is
-                    # fixed by installing it, then the import is retried once.
-                    diag, healed = _heal(str(first_err))
-                    if not healed:
-                        raise
-                    logger(f"Self-heal: {diag} — retrying import of {path.name}")
-                    spec = importlib.util.spec_from_file_location(module_name, path)
-                    if spec is None or spec.loader is None:
-                        raise
-                    module = importlib.util.module_from_spec(spec)
-                    sys.modules[module_name] = module
-                    spec.loader.exec_module(module)
+                    raise
 
             if getattr(module, "TOOL", None) is None:
                 continue   # not an action file — a helper/capture-only module
