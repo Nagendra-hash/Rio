@@ -60,17 +60,15 @@ def _parse_date(raw: str) -> str:
             return val.strftime("%Y-%m-%d")
 
     try:
-        from google import genai as _genai
-        _client  = _genai.Client(api_key=_get_api_key())
-        response = _client.models.generate_content(
-            model="gemini-flash-lite-latest",
-            contents=(
-                f"Today is {today.strftime('%Y-%m-%d')}. "
-                f"Convert this date expression to YYYY-MM-DD: '{raw}'. "
-                f"Return ONLY the date string, nothing else."
-            )
+        # Mark-LIV ladder: FAST tier (Live first, so the text quota pool is
+        # spared) with a deadline, instead of one hardcoded alias with none.
+        from core import gemini
+        result = gemini.text(
+            f"Today is {today.strftime('%Y-%m-%d')}. "
+            f"Convert this date expression to YYYY-MM-DD: '{raw}'. "
+            f"Return ONLY the date string, nothing else.",
+            tier=gemini.FAST,
         )
-        result = response.text.strip()
         if re.match(r"\d{4}-\d{2}-\d{2}", result):
             return result
     except Exception as e:
@@ -113,10 +111,14 @@ def _build_google_flights_url(
     else:
         trip = f"Flights+from+{origin}+to+{destination}+on+{date}"
 
+    # NOTE: no `tfs=` parameter. Google's structured-search blob overrides the
+    # free-text `q=` — a stale hardcoded blob (Istanbul→London, 2025-03-15)
+    # made every search load THAT trip instead of the requested one, and since
+    # its date was in the past the results list never rendered (page text
+    # stayed at the ~500-char shell). The `q=` free-text form works on its own.
     return (
         f"{base}"
         f"?q={trip}"
-        f"&tfs=CBwQAhoeEgoyMDI1LTAzLTE1agcIARIDSVNUcgcIARIDTEhS"   
         f"&curr=USD"
         f"&cabin={cabin_code}"
         f"&adults={passengers}"
@@ -144,6 +146,17 @@ def _search_flights_browser(
     time.sleep(5)
 
     raw = browser_control({"action": "get_text"})
+
+    # Google Flights is a JS app: the first paint is a ~500-char shell
+    # (header/nav only); flight cards render seconds later. When get_text
+    # opens a fresh automation window it re-navigates and reads immediately,
+    # so the shell is what comes back. Poll until real content arrives.
+    for _ in range(5):
+        if len(raw or "") > 1500:
+            break
+        time.sleep(3)
+        raw = browser_control({"action": "get_text"})
+
     return (raw or ""), url
 
 def _parse_flights_with_gemini(
@@ -152,10 +165,8 @@ def _parse_flights_with_gemini(
     destination: str,
     date:        str,
 ) -> list[dict]:
-    from google import genai as _genai
     from google.genai import types
 
-    _client = _genai.Client(api_key=_get_api_key())
     prompt  = (
         f"Extract flight options from {origin} to {destination} on {date} "
         f"from this Google Flights page text:\n\n{raw_text[:12000]}\n\n"
@@ -166,9 +177,13 @@ def _parse_flights_with_gemini(
     )
 
     try:
-        response = _client.models.generate_content(
-            model="gemini-flash-latest",
-            contents=prompt,
+        # Mark-LIV ladder: SMART tier + 30s deadline; the ladder returns the
+        # SDK response object (or None when every rung failed).
+        from core import gemini
+        response = gemini.call(
+            prompt,
+            tier=gemini.SMART,
+            timeout_ms=30_000,
             config=types.GenerateContentConfig(
                 system_instruction=(
                     "You are a flight data extraction expert. "
@@ -177,6 +192,8 @@ def _parse_flights_with_gemini(
                 )
             ),
         )
+        if response is None:
+            raise RuntimeError("every Gemini model on the ladder failed")
         text     = re.sub(r"```(?:json)?", "", response.text).strip().rstrip("`").strip()
         flights  = json.loads(text)
         return flights if isinstance(flights, list) else []

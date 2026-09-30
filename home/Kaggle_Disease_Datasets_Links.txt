@@ -1,0 +1,21 @@
+Kaggle Medical Datasets Search Results (Diseases):
+
+1. Find Open Datasets and Machine Learning Projects | Kaggle
+   Browse and download open datasets for disease research.
+   Source: https://www.kaggle.com/datasets?tags=4302-Diseases
+
+2. Disease Prediction Using Machine Learning - Kaggle
+   Dataset for predicting 42 different types of diseases based on 132 parameters.
+   Source: https://www.kaggle.com/datasets/kaushil268/disease-prediction-using-machine-learning
+
+3. NIH Chest X-ray Dataset
+   Over 100,000 chest X-ray images covering 14 thoracic disease categories.
+   Source: https://opendatascience.com/18-open-healthcare-datasets-2025-update/
+
+4. AyurGenixAI: Ayurvedic Dataset | Kaggle
+   Curated dataset for Ayurvedic diagnosis and personalized treatment.
+   Source: https://www.kaggle.com/datasets/kagglekirti123/ayurgenixai-ayurvedic-dataset
+
+5. Ayurvedic Formulations and their Indications
+   Dataset listing Ayurvedic formulations and their indications.
+   Source: https://www.kaggle.com/datasets/raghavdecoded/ayurvedic-formulations-and-their-indications

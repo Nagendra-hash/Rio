@@ -1,0 +1,12 @@
+[Unit]
+Description=JARVIS — Live model recovery probe, every 30 minutes
+
+[Timer]
+# A probe is one live speech session (~15s) against the candidate model; 30 min
+# bounds discovery latency at ~1h with the default 2-hit stability requirement,
+# while adding only ~48 probe sessions/day to the quota.
+OnCalendar=*:0/30
+Persistent=true
+
+[Install]
+WantedBy=timers.target

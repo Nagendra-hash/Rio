@@ -1,4 +1,8 @@
 # ── Core: UI, audio, Gemini Live ──────────────────────────────────────────────
+# NOTE (Linux/X11): PyQt6's xcb plugin needs libxcb-cursor0, which Ubuntu 22.04
+# does not preinstall. Without it the Qt UI aborts at startup with:
+#   "Could not load the Qt platform plugin \"xcb\" even though it was found."
+# Fix:  sudo apt-get install -y libxcb-cursor0
 PyQt6
 sounddevice
 numpy
@@ -7,8 +11,9 @@ google-genai>=2.8.0
 # ── Web search & browser control ──────────────────────────────────────────────
 requests
 beautifulsoup4
-duckduckgo-search
+ddgs   # web/news search fallback (renamed from duckduckgo-search)
 playwright
+browser-use              # autonomous browser agent (JARVIS + Hermes skill; uses system Chrome)
 
 # ── Automation / input control ────────────────────────────────────────────────
 pyautogui
@@ -17,8 +22,11 @@ pygetwindow
 
 # ── Vision & media ────────────────────────────────────────────────────────────
 pillow
-opencv-python
+opencv-python-headless
 mss
+# Wayland screen capture: talks to GNOME Shell's screenshot API over D-Bus
+# (pure Python — PyGObject is deliberately avoided, the venv cannot build it)
+jeepney
 
 # ── System, files & documents ─────────────────────────────────────────────────
 psutil
@@ -26,6 +34,8 @@ send2trash
 youtube-transcript-api
 python-pptx
 openpyxl
+pandas                      # file_processor Excel/CSV + trading_strategy dataframes
+pydub                       # file_processor — audio files
 
 # ── Remote dashboard (control from your phone) ────────────────────────────────
 fastapi
@@ -34,12 +44,31 @@ cryptography
 python-multipart
 qrcode[pil]
 
+# ── Voice engines (STT/TTS fallbacks — imported lazily, try/except at use) ────
+edge-tts                    # core/tts — free Microsoft cloud TTS fallback
+faster-whisper              # core/stt — local STT (also Hermes' STT engine)
+# vosk                     # core/stt — offline fallback STT; install only if needed
+
+# ── Local LLM rung (quota-free last resort — lazily imported) ─────────────────
+llama-cpp-python            # core/llm_local — Qwen2.5-Coder-3B GGUF rung
+
+# ── Desktop notifications (reminder action fallback) ─────────────────────────
+plyer
+
 # ── Plugin extras: Gmail / Google Calendar (OAuth) ────────────────────────────
 google-api-python-client
 google-auth-oauthlib
 
 # ── Plugin extras: Tuya / Smart Life smart light (home_assistant) ─────────────
 tinytuya
+
+# ── Plugin extras: trading_strategy (data + adaptive strategy) ────────────────
+yfinance
+# torch and tensorflow-cpu power the optional ML confirmation model (action:
+# 'train'). They are imported ONLY inside that action — never at startup — and
+# are ~200-600 MB, so install them when wanted:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   pip install tensorflow-cpu
 
 # ── Windows-only (pip skips these automatically on macOS / Linux) ─────────────
 comtypes;   sys_platform == "win32"
@@ -57,3 +86,17 @@ wmi;        sys_platform == "win32"
 # macOS / Linux OS actions (volume, brightness, reminders) shell out to native
 # tools (pactl / brightnessctl / osascript / systemd), so no extra Python
 # packages are needed there — nothing Windows-specific is ever pulled in.
+
+# ── Mark-LIV additions (optional, try/except at point of use) ─────────────────
+# Synced from the Mark-LIV repo; each is imported defensively, so a missing
+# package only disables one feature instead of stopping the app.
+pdfplumber                  # file_processor — PDF text and tables
+PyPDF2                      # file_processor — PDF fallback reader
+python-docx                 # file_processor — .docx reading
+paho-mqtt                   # printer_control plugin — MQTT printers
+pynvml                      # system_monitor + HUD GPU meter (NVIDIA)
+
+# ── Hermes bridge (jarvis-pdf-forward hook + scripts/jarvis_inbox.py) ─────────
+# No extra packages: the hook and the inbox are stdlib-only on purpose. They
+# talk to the dashboard's /api/message endpoint (python-multipart + cryptography
+# above) and shell out to the `hermes` CLI — see .agents/skills/jarvis-hermes-bridge/

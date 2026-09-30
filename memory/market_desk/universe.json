@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "note": "Approved research universe. Edit by hand; the desk never expands it from model memory.",
+  "companies": [
+    {
+      "name": "Reliance Industries",
+      "symbol": "RELIANCE.NS",
+      "market": "NSE",
+      "aliases": [
+        "RIL",
+        "Reliance"
+      ]
+    },
+    {
+      "name": "Tata Consultancy Services",
+      "symbol": "TCS.NS",
+      "market": "NSE",
+      "aliases": [
+        "TCS"
+      ]
+    },
+    {
+      "name": "Infosys",
+      "symbol": "INFY.NS",
+      "market": "NSE",
+      "aliases": [
+        "Infosys"
+      ]
+    },
+    {
+      "name": "HDFC Bank",
+      "symbol": "HDFCBANK.NS",
+      "market": "NSE",
+      "aliases": [
+        "HDFC Bank"
+      ]
+    },
+    {
+      "name": "ITC",
+      "symbol": "ITC.NS",
+      "market": "NSE",
+      "aliases": [
+        "ITC Ltd"
+      ]
+    },
+    {
+      "name": "Larsen & Toubro",
+      "symbol": "LT.NS",
+      "market": "NSE",
+      "aliases": [
+        "L&T",
+        "LT"
+      ]
+    },
+    {
+      "name": "State Bank of India",
+      "symbol": "SBIN.NS",
+      "market": "NSE",
+      "aliases": [
+        "SBI"
+      ]
+    },
+    {
+      "name": "Bharti Airtel",
+      "symbol": "BHARTIARTL.NS",
+      "market": "NSE",
+      "aliases": [
+        "Airtel"
+      ]
+    },
+    {
+      "name": "Bitcoin",
+      "symbol": "BTC-USD",
+      "market": "crypto",
+      "aliases": [
+        "BTC",
+        "Bitcoin"
+      ]
+    },
+    {
+      "name": "Ethereum",
+      "symbol": "ETH-USD",
+      "market": "crypto",
+      "aliases": [
+        "ETH",
+        "Ethereum"
+      ]
+    }
+  ]
+}

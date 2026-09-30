@@ -1,0 +1,12 @@
+{
+  "enabled": true,
+  "mode": "paper",
+  "max_daily_loss_pct": 2.0,
+  "max_position_usd": 1000,
+  "max_daily_trades": 10,
+  "cooldown_seconds": 60,
+  "require_confirmation": false,
+  "symbols_whitelist": [],
+  "symbols_blacklist": [],
+  "min_signal_score": 3.0
+}

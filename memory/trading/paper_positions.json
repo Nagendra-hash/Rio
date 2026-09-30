@@ -1,0 +1,254 @@
+{
+  "TCS.NS:swing": {
+    "symbol": "TCS.NS",
+    "method": "swing",
+    "direction": "SHORT",
+    "entry_price": 2115.5,
+    "stop_loss": 2211.831484,
+    "targets": [
+      2019.168516,
+      1922.837032,
+      1826.505549
+    ],
+    "position_size": 1,
+    "capital_at_entry": 10000.0,
+    "atr": 64.220989,
+    "open_time": "2026-09-18T07:54:02+00:00",
+    "last_update": "2026-09-18T07:54:02+00:00",
+    "status": "open",
+    "hits": [
+      false,
+      false,
+      false
+    ],
+    "max_favorable_excursion": 0.0,
+    "max_unfavorable_excursion": 0.0,
+    "rules_votes": {
+      "ema_trend": -1,
+      "triple_rsi": 0,
+      "sd_zones": 0,
+      "order_blocks": 0,
+      "vol_trail": 0,
+      "reversal_pivot": -1,
+      "alligator": -1,
+      "ema_stack": -1,
+      "mtf_alignment": -1
+    },
+    "closed_reason": null,
+    "closed_time": null,
+    "exit_price": null,
+    "realized_pnl_pct": null,
+    "realized_pnl": null,
+    "slip_bps": 0
+  },
+  "AAPL:swing": {
+    "symbol": "AAPL",
+    "method": "swing",
+    "direction": "LONG",
+    "entry_price": 337.0,
+    "stop_loss": 325.888286,
+    "targets": [
+      348.111714,
+      359.223427,
+      370.335141
+    ],
+    "position_size": 8,
+    "capital_at_entry": 10000.0,
+    "atr": 7.407809,
+    "open_time": "2026-09-18T07:54:04+00:00",
+    "last_update": "2026-09-18T07:54:04+00:00",
+    "status": "open",
+    "hits": [
+      false,
+      false,
+      false
+    ],
+    "max_favorable_excursion": 0.0,
+    "max_unfavorable_excursion": 0.0,
+    "rules_votes": {
+      "ema_trend": 1,
+      "triple_rsi": 0,
+      "sd_zones": 0,
+      "order_blocks": 0,
+      "vol_trail": 0,
+      "reversal_pivot": 0,
+      "alligator": 1,
+      "ema_stack": 1,
+      "mtf_alignment": 1
+    },
+    "closed_reason": null,
+    "closed_time": null,
+    "exit_price": null,
+    "realized_pnl_pct": null,
+    "realized_pnl": null,
+    "slip_bps": 0
+  },
+  "BTC-USD:swing": {
+    "symbol": "BTC-USD",
+    "method": "swing",
+    "direction": "SHORT",
+    "entry_price": 83898.796875,
+    "stop_loss": 84363.194379,
+    "targets": [
+      83434.399371,
+      82970.001867,
+      82505.604363
+    ],
+    "position_size": 1,
+    "capital_at_entry": 10000.0,
+    "atr": 309.598336,
+    "open_time": "2026-09-26T07:03:12+00:00",
+    "last_update": "2026-09-26T07:03:12+00:00",
+    "status": "open",
+    "hits": [
+      false,
+      false,
+      false
+    ],
+    "max_favorable_excursion": 0.0,
+    "max_unfavorable_excursion": 0.0,
+    "rules_votes": {
+      "ema_trend": 0,
+      "triple_rsi": 0,
+      "sd_zones": 0,
+      "order_blocks": 0,
+      "vol_trail": 0,
+      "reversal_pivot": 0,
+      "alligator": -1,
+      "ema_stack": 0,
+      "mtf_alignment": 0
+    },
+    "closed_reason": null,
+    "closed_time": null,
+    "exit_price": null,
+    "realized_pnl_pct": null,
+    "realized_pnl": null,
+    "slip_bps": 0
+  },
+  "SOL-USD:intraday": {
+    "symbol": "SOL-USD",
+    "method": "intraday",
+    "direction": "SHORT",
+    "entry_price": 108.589996,
+    "stop_loss": 108.837985,
+    "targets": [
+      108.342007,
+      108.094018,
+      107.846029
+    ],
+    "position_size": 403,
+    "capital_at_entry": 10000.0,
+    "atr": 0.247989,
+    "open_time": "2026-09-20T06:28:39+00:00",
+    "last_update": "2026-09-20T06:28:39+00:00",
+    "status": "open",
+    "hits": [
+      false,
+      false,
+      false
+    ],
+    "max_favorable_excursion": 0.0,
+    "max_unfavorable_excursion": 0.0,
+    "rules_votes": {
+      "ema_trend": -1,
+      "triple_rsi": 0,
+      "sd_zones": 0,
+      "order_blocks": 0,
+      "vol_trail": 0,
+      "reversal_pivot": 0,
+      "alligator": -1,
+      "ema_stack": -1,
+      "mtf_alignment": 1
+    },
+    "closed_reason": null,
+    "closed_time": null,
+    "exit_price": null,
+    "realized_pnl_pct": null,
+    "realized_pnl": null,
+    "slip_bps": 0
+  },
+  "BTC-USD:intraday": {
+    "symbol": "BTC-USD",
+    "method": "intraday",
+    "direction": "LONG",
+    "entry_price": 81676.992188,
+    "stop_loss": 81575.00084,
+    "targets": [
+      81778.983535,
+      81880.974882,
+      81982.966229
+    ],
+    "position_size": 1,
+    "capital_at_entry": 10000.0,
+    "atr": 101.991347,
+    "open_time": "2026-09-21T06:37:13+00:00",
+    "last_update": "2026-09-21T06:37:13+00:00",
+    "status": "open",
+    "hits": [
+      false,
+      false,
+      false
+    ],
+    "max_favorable_excursion": 0.0,
+    "max_unfavorable_excursion": 0.0,
+    "rules_votes": {
+      "ema_trend": 1,
+      "triple_rsi": 0,
+      "sd_zones": 0,
+      "order_blocks": 0,
+      "vol_trail": 0,
+      "reversal_pivot": 0,
+      "alligator": 0,
+      "ema_stack": 0,
+      "mtf_alignment": 1
+    },
+    "closed_reason": null,
+    "closed_time": null,
+    "exit_price": null,
+    "realized_pnl_pct": null,
+    "realized_pnl": null,
+    "slip_bps": 0
+  },
+  "^NSEI:swing": {
+    "symbol": "^NSEI",
+    "method": "swing",
+    "direction": "SHORT",
+    "entry_price": 23140.5,
+    "stop_loss": 23433.624918,
+    "targets": [
+      22847.375082,
+      22554.250165,
+      22261.125247
+    ],
+    "position_size": 1,
+    "capital_at_entry": 10000.0,
+    "atr": 195.416612,
+    "open_time": "2026-09-26T07:01:27+00:00",
+    "last_update": "2026-09-26T07:01:27+00:00",
+    "status": "open",
+    "hits": [
+      false,
+      false,
+      false
+    ],
+    "max_favorable_excursion": 0.0,
+    "max_unfavorable_excursion": 0.0,
+    "rules_votes": {
+      "ema_trend": -1,
+      "triple_rsi": 0,
+      "sd_zones": 0,
+      "order_blocks": 0,
+      "vol_trail": 0,
+      "reversal_pivot": 0,
+      "alligator": -1,
+      "ema_stack": -1,
+      "mtf_alignment": -1
+    },
+    "closed_reason": null,
+    "closed_time": null,
+    "exit_price": null,
+    "realized_pnl_pct": null,
+    "realized_pnl": null,
+    "slip_bps": 0
+  }
+}

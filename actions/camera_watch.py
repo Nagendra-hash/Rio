@@ -16,11 +16,16 @@ often exposes several nodes in quick succession (capture + metadata), so we
 wait for the device list to stay stable before reporting.
 
 Also self-describes a `camera_status` TOOL (same shape as every other
-bundled action) so the user can ask "do I have a webcam?" by voice.
+bundled action) so the user can ask "do I have a webcam?" by voice — and
+when no camera exists on a machine that is KNOWN to have an internal one,
+it diagnoses why (wedged USB controller vs. driver problem) and says the
+fix that actually clears it.
 """
 from __future__ import annotations
 
 import glob
+import re
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -135,14 +140,123 @@ def list_cameras(dev_root: str = "/dev") -> dict[str, str]:
     return _snapshot(dev_root)
 
 
+# ── Failure diagnosis: the wedged-webcam case ─────────────────────────────────
+# Internal UVC cameras (e.g. the Inspiron 3542's Integrated_Webcam_HD) can wedge
+# at the USB level while in use: kernel logs "device descriptor read/64, error
+# -32" until it gives up. The camera then answers electrical presence but
+# completes no transaction — no /dev/video node, nothing in lsusb, and NO sysfs
+# entry — so "camera wedged" and "no camera installed" look identical to a glob
+# of /dev/video*. A USB-controller unbind/bind does NOT clear it (verified live:
+# the re-probe fails with the same -32); only removing power does. These helpers
+# let camera_status tell the cases apart and give the fix that actually works.
+_INTERNAL_CAM_VIDPID = "0c45:670b"   # Integrated_Webcam_HD (this Dell)
+
+# Product strings internal camera modules report over USB, by vendor. The
+# journal grep is the 'this machine HAS an internal webcam' signal — kept to
+# internal-module names so a once-plugged EXTERNAL cam can never make a
+# desktop-without-camera report a wedged internal module.
+_INTERNAL_CAM_NAMES = re.compile(
+    r"Integrated_Webcam"        # Dell
+    r"|Integrated Camera"       # Lenovo
+    r"|HP TrueVision"           # HP
+    r"|WebCam_HD|HD WebCam"     # generic laptop modules
+)
+
+_MSG_HALF_ENUMERATED = (
+    "The internal webcam is detected on USB but produced no video device — "
+    "try: sudo modprobe uvcvideo, and reboot if that doesn't help."
+)
+_MSG_WEDGED = (
+    "Your internal webcam has dropped off the USB bus — the laptop keeps it "
+    "powered, so a normal reboot may not clear it. Do a full shutdown, unplug "
+    "the charger, hold the power button for 30 seconds, then boot. If it keeps "
+    "dropping, the camera module or its cable may be failing — an external USB "
+    "webcam works as a workaround."
+)
+
+_KNOWN_INTERNAL_CAM: bool | None = None   # computed once per process
+
+
+def _usb_controllers_present(sys_root: str) -> bool:
+    """True when at least one root USB hub (host controller) is visible.
+    VMs often hide USB topology entirely — then there is nothing to diagnose."""
+    return bool(glob.glob(f"{sys_root}/bus/usb/devices/usb*"))
+
+
+def _find_usb_device(vid_pid: str, sys_root: str) -> bool:
+    """True when a USB device with this 'vid:pid' is (at least half-)enumerated.
+    Reads the kernel-generated modalias of every device on the bus; matches
+    case-insensitively because modalias upper-cases both fields."""
+    want = vid_pid.lower()
+    for mpath in glob.glob(f"{sys_root}/bus/usb/devices/*/modalias"):
+        try:
+            m = re.match(r"usb:v([0-9A-Fa-f]{4})p([0-9A-Fa-f]{4})",
+                         Path(mpath).read_text(errors="ignore").strip())
+        except Exception:
+            continue
+        if m and f"{m.group(1).lower()}:{m.group(2).lower()}" == want:
+            return True
+    return False
+
+
+def _known_internal_camera() -> bool:
+    """True when the kernel journal shows this machine has an internal webcam —
+    the distinction between 'wedged controller' and 'never had one'. Cached:
+    the journal is scanned at most once per process; any failure means False
+    (generic advice is always safe)."""
+    global _KNOWN_INTERNAL_CAM
+    if _KNOWN_INTERNAL_CAM is None:
+        _KNOWN_INTERNAL_CAM = False
+        try:
+            out = subprocess.run(
+                ["journalctl", "-k", "--no-pager"],
+                capture_output=True, text=True, timeout=8)
+            _KNOWN_INTERNAL_CAM = bool(_INTERNAL_CAM_NAMES.search(out.stdout))
+        except Exception:
+            pass
+    return _KNOWN_INTERNAL_CAM
+
+
+def diagnose_camera(dev_root: str = "/dev", sys_root: str = "/sys",
+                    known_internal: bool | None = None) -> str:
+    """Best-effort explanation for 'no cameras found'. Returns '' when cameras
+    exist, when there is nothing to diagnose (no internal webcam on record),
+    or when the platform hides what we need (VMs). Never raises.
+
+    dev_root/sys_root are injectable for offline tests; known_internal can be
+    forced to skip the journal scan in tests."""
+    try:
+        if _snapshot(dev_root):
+            return ""                              # camera(s) present — all good
+        if known_internal is None:
+            if not _usb_controllers_present(sys_root):
+                return ""
+            known_internal = _known_internal_camera()
+        if not known_internal:
+            return ""
+        if _find_usb_device(_INTERNAL_CAM_VIDPID, sys_root):
+            return _MSG_HALF_ENUMERATED            # enumerated, no driver node
+        return _MSG_WEDGED                         # controller alive, camera gone
+    except Exception:
+        return ""
+
+
 # ── Voice tool: camera_status ─────────────────────────────────────────────────
 
+def _camera_status_text(dev_root: str = "/dev", sys_root: str = "/sys",
+                        known_internal: bool | None = None) -> str:
+    cams = _snapshot(dev_root)
+    if cams:
+        lines = [f"{i + 1}. {name} ({node})" for i, (node, name) in enumerate(cams.items())]
+        return "Connected camera(s):\n" + "\n".join(lines)
+    hint = diagnose_camera(dev_root, sys_root, known_internal)
+    if hint:
+        return f"No webcam is available right now. {hint}"
+    return "No webcam is connected right now. Plug one in and I'll detect it automatically."
+
+
 def camera_status(parameters: dict = None, **_) -> str:
-    cams = _snapshot()
-    if not cams:
-        return "No webcam is connected right now. Plug one in and I'll detect it automatically."
-    lines = [f"{i + 1}. {name} ({node})" for i, (node, name) in enumerate(cams.items())]
-    return f"Connected camera(s):\n" + "\n".join(lines)
+    return _camera_status_text()
 
 
 TOOL = {
@@ -150,7 +264,9 @@ TOOL = {
     "description": (
         "Report which webcams are currently connected to this computer. "
         "Use when the user asks about camera availability, whether a webcam "
-        "is plugged in, or why the camera isn't working."
+        "is plugged in, or why the camera isn't working. Diagnoses a webcam "
+        "that dropped off the USB bus (says the power-drain fix) instead of "
+        "just reporting 'no camera found'."
     ),
     "parameters": {"type": "OBJECT", "properties": {}},
     "handler": camera_status,

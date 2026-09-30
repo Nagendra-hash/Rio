@@ -1,0 +1,316 @@
+//@version=5
+// ═══════════════════════════════════════════════════════════════════════════════
+//  JARVIS STRATEGY MIRROR — 9-rule weighted vote (port of trading_strategy.py)
+//
+//  What this mirrors from JARVIS (plugins/trading_strategy.py):
+//    • The nine rules: ema_trend, triple_rsi, sd_zones, order_blocks,
+//      vol_trail, reversal_pivot, alligator, ema_stack, mtf_alignment
+//    • Per-method profiles: intraday (15m), swing (1d), positional (1d)
+//    • Weighted score with threshold ±2.0 → LONG / SHORT / FLAT
+//    • Auto-drawn trade plan: entry zone, ATR stop, 1R/2R/3R targets
+//    • Weights below are JARVIS's ADAPTED weights (memory/trading/weights.json)
+//
+//  What intentionally does NOT carry over:
+//    • The ML confirmation bonus (±0.6) — the model runs on JARVIS's side.
+//      It can only flip a signal whose score is within 0.6 of the threshold.
+//
+//  Alerts → JARVIS: create one alert on this indicator, condition
+//  "Any alert() function call", check "Webhook URL" and paste
+//      http://<your-pc-ip>:8000/api/tradingview
+//  Put your dashboard_auth_token (JARVIS settings) in the Secret input below.
+//  JARVIS receives {"secret","symbol","action","entry_price","stop_loss",
+//  "targets"} and routes it to the paper/live trader.
+// ═══════════════════════════════════════════════════════════════════════════════
+indicator("JARVIS Strategy Mirror", "JARVIS Mirror", overlay=true,
+     max_lines_count=500, max_labels_count=500)
+
+// ── inputs ────────────────────────────────────────────────────────────────────
+method    = input.string("Swing", "Method", options=["Intraday", "Swing", "Positional"])
+threshold = input.float(2.0, "Score threshold", minval=0.5, step=0.5,
+     tooltip="Weighted votes needed to fire (JARVIS: 2.0)")
+
+grpW = "Rule weights — adapted (memory/trading/weights.json)"
+w_ema_trend   = input.float(1.6445, "ema_trend",      step=0.05, group=grpW)
+w_triple_rsi  = input.float(1.0333, "triple_rsi",     step=0.05, group=grpW)
+w_sd_zones    = input.float(1.0,    "sd_zones",       step=0.05, group=grpW)
+w_orderblocks = input.float(0.7915, "order_blocks",   step=0.05, group=grpW)
+w_voltrail    = input.float(0.7814, "vol_trail",      step=0.05, group=grpW)
+w_revpivot    = input.float(0.7713, "reversal_pivot", step=0.05, group=grpW)
+w_alligator   = input.float(1.7342, "alligator",      step=0.05, group=grpW)
+w_emastack    = input.float(2.1475, "ema_stack",      step=0.05, group=grpW)
+w_mtf         = input.float(2.8797, "mtf_alignment",  step=0.05, group=grpW)
+
+grpS = "Signal & style"
+showEMAs    = input.bool(true,  "Show EMA stack",          group=grpS)
+showTrail   = input.bool(true,  "Show Hull+ATR trail",     group=grpS)
+showAlli    = input.bool(false, "Show Alligator lines",    group=grpS)
+showLevels  = input.bool(true,  "Draw entry/stop/targets", group=grpS)
+showTable   = input.bool(true,  "Show votes table",        group=grpS)
+keepLast    = input.bool(true,  "Keep only latest levels", group=grpS,
+     tooltip="Off = levels accumulate for every historical signal")
+
+grpA = "Alerts → JARVIS dashboard"
+fireAlerts = input.bool(true, "Fire alert() JSON on signals",        group=grpA)
+tvSecret   = input.string("", "Webhook secret (dashboard_auth_token)", group=grpA)
+inclPrice  = input.bool(true, "Include entry/stop/targets in JSON",  group=grpA)
+
+// ── method profile (mirrors the METHODS dict) ─────────────────────────────────
+isIntra  = method == "Intraday"
+isPos    = method == "Positional"
+lenF     = isIntra ? 9  : isPos ? 50  : 21          // ema_stack fast
+lenM     = isIntra ? 21 : isPos ? 100 : 50          // ema_stack mid
+lenS     = isIntra ? 50 : isPos ? 200 : 200         // ema_stack slow
+hullLen  = isIntra ? 36 : 72                        // Hull length
+trailAtr = isIntra ? 1.2 : isPos ? 2.5 : 1.7        // trail_atr
+atrStop  = isIntra ? 1.0 : isPos ? 2.0 : 1.5        // atr_stop
+entryAtr = isIntra ? 0.20 : isPos ? 0.30 : 0.25     // atr_entry
+zoneMult = isIntra ? 1.0 : 1.2                      // zone_atr_mult
+t1r      = isPos ? 2.0 : 1.0                        // targets_r
+t2r      = isPos ? 3.0 : 2.0
+t3r      = isPos ? 5.0 : 3.0
+
+// ── helpers (global scope — Pine requires it) ─────────────────────────────────
+// Hull variant used by JARVIS: EMA-smoothed hull (not the WMA-based ta.hma)
+f_hma(float src, simple int n) =>
+    half = math.max(2, math.floor(n / 2))
+    sq   = math.max(2, math.round(math.sqrt(n)))
+    ta.ema(2 * ta.ema(src, half) - ta.ema(src, n), sq)
+
+f_dir(int v) => v == 1 ? "▲" : v == -1 ? "▼" : "·"
+f_col(int v) => v == 1 ? color.new(#26a69a, 0) : v == -1 ? color.new(#ef5350, 0) : color.new(#787b86, 0)
+
+f_mtfSig() => ta.ema(close, 30) > ta.ema(close, 60) ? 1 : ta.ema(close, 30) < ta.ema(close, 60) ? -1 : 0
+
+// ── core indicators (same math as _add_indicators) ────────────────────────────
+emaF   = ta.ema(close, lenF)
+emaM   = ta.ema(close, lenM)
+emaS   = ta.ema(close, lenS)
+ema50  = ta.ema(close, 50)
+ema200 = ta.ema(close, 200)
+rsi14  = ta.rsi(close, 14)          // Wilder — matches pandas ewm(alpha=1/14)
+rsi5   = ta.rsi(close, 5)
+atr14  = ta.atr(14)                 // RMA — matches pandas ewm(alpha=1/14)
+atr10  = ta.atr(10)
+volSMA = ta.sma(volume, 20)
+
+hl2   = (high + low) / 2
+jaw   = ta.rma(hl2, 13)             // SMMA — pandas ewm(alpha=1/n)
+teeth = ta.rma(hl2, 8)
+lips  = ta.rma(hl2, 5)
+
+hull = f_hma(hl2, hullLen)
+
+// Hull+ATR volatility trail (BOSWaves) — same flip logic as the Python loop
+var float trailLine = na
+var int   trendDir  = 1
+upper = hull + atr10 * trailAtr
+lower = hull - atr10 * trailAtr
+if na(trailLine)
+    trailLine := close > hull ? lower : upper
+if trendDir == 1
+    trailLine := math.max(lower, trailLine)
+    if close < trailLine
+        trendDir := -1
+        trailLine := upper
+else
+    trailLine := math.min(upper, trailLine)
+    if close > trailLine
+        trendDir := 1
+        trailLine := lower
+
+// ── MTF vote (EMA30 vs EMA60 on 1H/4H/D/W, bull only if none disagree) ───────
+sigChart = f_mtfSig()
+v60s  = request.security(syminfo.tickerid, "60",  f_mtfSig(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+v240s = request.security(syminfo.tickerid, "240", f_mtfSig(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+vDs   = request.security(syminfo.tickerid, "D",   f_mtfSig(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+vWs   = request.security(syminfo.tickerid, "W",   f_mtfSig(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+sec60  = timeframe.in_seconds(timeframe.period) < timeframe.in_seconds("60")
+sec240 = timeframe.in_seconds(timeframe.period) < timeframe.in_seconds("240")
+secD   = timeframe.in_seconds(timeframe.period) < timeframe.in_seconds("D")
+secW   = timeframe.in_seconds(timeframe.period) < timeframe.in_seconds("W")
+v60  = sec60  ? v60s  : sigChart
+v240 = sec240 ? v240s : sigChart
+vD   = secD   ? vDs   : sigChart
+vW   = secW   ? vWs   : sigChart
+anyBull = v60 == 1 or v240 == 1 or vD == 1 or vW == 1
+anyBear = v60 == -1 or v240 == -1 or vD == -1 or vW == -1
+v9 = anyBull and not anyBear ? 1 : anyBear and not anyBull ? -1 : 0
+
+// ── the nine rule votes (mirrors _votes_at) ───────────────────────────────────
+// 1) EMA trend stack — price vs EMA50/EMA200
+v1 = close > ema50 and ema50 > ema200 ? 1 : close < ema50 and ema50 < ema200 ? -1 : 0
+
+// 2) Triple-RSI mean reversion (RSI5 pattern + 200MA filter)
+v2 = 0
+fall3 = rsi5 < rsi5[1] and rsi5[1] < rsi5[2]
+rise3 = rsi5 > rsi5[1] and rsi5[1] > rsi5[2]
+if fall3 and rsi5 < 30 and rsi5[3] < 60 and close > ema200
+    v2 := 1
+else if rise3 and rsi5 > 70 and rsi5[3] > 40 and close < ema200
+    v2 := -1
+
+// 3) Supply/demand zone retest (origin candle = previous bar)
+body1  = math.abs(close[1] - open[1])
+atrRef = atr14[1] > 0 ? atr14[1] : close * 0.02
+v3 = 0
+if close[1] > high[2] and body1 >= zoneMult * atrRef and close[1] > open[1]
+    if low <= high[2] * 1.001 and close > open
+        v3 := 1
+else if close[1] < low[2] and body1 >= zoneMult * atrRef and close[1] < open[1]
+    if high >= low[2] * 0.999 and close < open
+        v3 := -1
+
+// 4) Volumized order block — 10-bar swing break on ≥1.3× average volume
+swingHi = ta.highest(high, 10)[1]
+swingLo = ta.lowest(low, 10)[1]
+volX    = volume / (volSMA > 0 ? volSMA : 1.0)
+v4 = close > swingHi and volX > 1.3 ? 1 : close < swingLo and volX > 1.3 ? -1 : 0
+
+// 5) Volatility trail flip
+v5 = trendDir == 1 and trendDir[1] != 1 ? 1 : trendDir == -1 and trendDir[1] != -1 ? -1 : 0
+
+// 6) Reversal pivot — pivot low k bars back, ≥2.5×ATR10 move away + confirming close
+k = 3
+loWin = ta.lowest(low, k + 1)[k]
+hiWin = ta.highest(high, k + 1)[k]
+atrK  = atr10[k] > 0 ? atr10[k] : close * 0.02
+v6 = 0
+if low[k] == loWin and close - low[k] >= 2.5 * atrK and close > open
+    v6 := 1
+else if high[k] == hiWin and high[k] - close >= 2.5 * atrK and close < open
+    v6 := -1
+
+// 7) Alligator alignment — lips>teeth>jaw and price beyond the lips
+v7 = lips > teeth and teeth > jaw and close > lips ? 1 :
+     lips < teeth and teeth < jaw and close < lips ? -1 : 0
+
+// 8) EMA stack alignment — fast>mid>slow and price beyond the fast EMA
+v8 = emaF > emaM and emaM > emaS and close > emaF ? 1 :
+     emaF < emaM and emaM < emaS and close < emaF ? -1 : 0
+
+// ── weighted score → signal ───────────────────────────────────────────────────
+score = w_ema_trend * v1 + w_triple_rsi * v2 + w_sd_zones * v3 + w_orderblocks * v4 +
+     w_voltrail * v5 + w_revpivot * v6 + w_alligator * v7 + w_emastack * v8 + w_mtf * v9
+longSig  = score >= threshold
+shortSig = score <= -threshold
+
+// ── plots ─────────────────────────────────────────────────────────────────────
+plot(showEMAs ? emaF : na, "EMA fast", color=color.new(#26a69a, 0), linewidth=1)
+plot(showEMAs ? emaM : na, "EMA mid",  color=color.new(#ffb74d, 0), linewidth=1)
+plot(showEMAs ? emaS : na, "EMA slow", color=color.new(#42a5f5, 0), linewidth=1)
+plot(showAlli ? jaw : na,   "Jaw",   color=color.new(#2962ff, 20))
+plot(showAlli ? teeth : na, "Teeth", color=color.new(#d81b60, 20))
+plot(showAlli ? lips : na,  "Lips",  color=color.new(#43a047, 20))
+plot(showTrail and trendDir == 1  ? trailLine : na, "Trail ↑", color=color.new(#26a69a, 0), style=plot.style_linebr, linewidth=2)
+plot(showTrail and trendDir == -1 ? trailLine : na, "Trail ↓", color=color.new(#ef5350, 0), style=plot.style_linebr, linewidth=2)
+plotshape(longSig,  "LONG",  shape.triangleup,  location.belowbar, color.new(#26a69a, 0), size=size.small)
+plotshape(shortSig, "SHORT", shape.triangledown, location.abovebar, color.new(#ef5350, 0), size=size.small)
+bgcolor(longSig ? color.new(#26a69a, 92) : shortSig ? color.new(#ef5350, 92) : na)
+
+// ── auto-drawn trade plan (entry zone / stop / targets) ───────────────────────
+var line  lnEntryU = na
+var line  lnEntryL = na
+var line  lnStop   = na
+var line  lnTP1    = na
+var line  lnTP2    = na
+var line  lnTP3    = na
+var label lbStop   = na
+var label lbTP     = na
+
+f_clear() =>
+    line.delete(lnEntryU)
+    line.delete(lnEntryL)
+    line.delete(lnStop)
+    line.delete(lnTP1)
+    line.delete(lnTP2)
+    line.delete(lnTP3)
+    label.delete(lbStop)
+    label.delete(lbTP)
+
+if (longSig or shortSig) and showLevels
+    if keepLast
+        f_clear()
+    dir   = longSig ? 1 : -1
+    stopP = close - dir * atrStop * atr14
+    risk  = math.abs(close - stopP)
+    eUp   = close + dir * entryAtr * atr14
+    eDn   = close - dir * entryAtr * atr14
+    tp1   = close + dir * t1r * risk
+    tp2   = close + dir * t2r * risk
+    tp3   = close + dir * t3r * risk
+    x2    = bar_index + 15
+    lnEntryU := line.new(bar_index, eUp, x2, eUp, color=color.new(#787b86, 0), style=line.style_dotted)
+    lnEntryL := line.new(bar_index, eDn, x2, eDn, color=color.new(#787b86, 0), style=line.style_dotted)
+    lnStop   := line.new(bar_index, stopP, x2, stopP, color=color.new(#ef5350, 0), width=2)
+    lnTP1    := line.new(bar_index, tp1, x2, tp1, color=color.new(#26a69a, 30), style=line.style_dashed)
+    lnTP2    := line.new(bar_index, tp2, x2, tp2, color=color.new(#26a69a, 0),  style=line.style_dashed)
+    lnTP3    := line.new(bar_index, tp3, x2, tp3, color=color.new(#089981, 0),  style=line.style_dashed, width=2)
+    lbStop   := label.new(x2, stopP, "STOP " + str.tostring(stopP, format.mintick),
+         style=label.style_label_left, color=color.new(#ef5350, 80), textcolor=color.white, size=size.small)
+    lbTP     := label.new(x2, tp3, "TP3 " + str.tostring(tp3, format.mintick),
+         style=label.style_label_left, color=color.new(#089981, 80), textcolor=color.white, size=size.small)
+
+// ── votes table (3 columns × 12 rows: header, column titles, 9 rules, score) ──
+var table vt = table.new(position.top_right, 3, 12, bgcolor=color.new(#131722, 15),
+     border_width=1, border_color=color.new(#363a45, 50))
+f_cell(int col, int row, string txt, color c) =>
+    table.cell(vt, col, row, txt, text_color=c, text_size=size.small, text_halign=text.align_left)
+if showTable and barstate.islast
+    f_cell(0, 0, "JARVIS " + method, color.white)
+    f_cell(1, 0, syminfo.ticker, color.new(#787b86, 0))
+    f_cell(2, 0, timeframe.period, color.new(#787b86, 0))
+    f_cell(0, 1, "rule", color.new(#787b86, 0))
+    f_cell(1, 1, "wt",   color.new(#787b86, 0))
+    f_cell(2, 1, "vote", color.new(#787b86, 0))
+    f_cell(0, 2, "ema_trend",      f_col(v1))
+    f_cell(1, 2, str.tostring(w_ema_trend, "#.##"), color.new(#787b86, 0))
+    f_cell(2, 2, f_dir(v1), f_col(v1))
+    f_cell(0, 3, "triple_rsi",     f_col(v2))
+    f_cell(1, 3, str.tostring(w_triple_rsi, "#.##"), color.new(#787b86, 0))
+    f_cell(2, 3, f_dir(v2), f_col(v2))
+    f_cell(0, 4, "sd_zones",       f_col(v3))
+    f_cell(1, 4, str.tostring(w_sd_zones, "#.##"), color.new(#787b86, 0))
+    f_cell(2, 4, f_dir(v3), f_col(v3))
+    f_cell(0, 5, "order_blocks",   f_col(v4))
+    f_cell(1, 5, str.tostring(w_orderblocks, "#.##"), color.new(#787b86, 0))
+    f_cell(2, 5, f_dir(v4), f_col(v4))
+    f_cell(0, 6, "vol_trail",      f_col(v5))
+    f_cell(1, 6, str.tostring(w_voltrail, "#.##"), color.new(#787b86, 0))
+    f_cell(2, 6, f_dir(v5), f_col(v5))
+    f_cell(0, 7, "reversal_pivot", f_col(v6))
+    f_cell(1, 7, str.tostring(w_revpivot, "#.##"), color.new(#787b86, 0))
+    f_cell(2, 7, f_dir(v6), f_col(v6))
+    f_cell(0, 8, "alligator",      f_col(v7))
+    f_cell(1, 8, str.tostring(w_alligator, "#.##"), color.new(#787b86, 0))
+    f_cell(2, 8, f_dir(v7), f_col(v7))
+    f_cell(0, 9, "ema_stack",      f_col(v8))
+    f_cell(1, 9, str.tostring(w_emastack, "#.##"), color.new(#787b86, 0))
+    f_cell(2, 9, f_dir(v8), f_col(v8))
+    f_cell(0, 10, "mtf_align",     f_col(v9))
+    f_cell(1, 10, str.tostring(w_mtf, "#.##"), color.new(#787b86, 0))
+    f_cell(2, 10, f_dir(v9), f_col(v9))
+    f_cell(0, 11, "SCORE", color.white)
+    table.cell(vt, 1, 11, str.tostring(score, "#.##") + (longSig ? "  LONG" : shortSig ? "  SHORT" : "  FLAT"),
+         text_color=color.white, text_size=size.small,
+         bgcolor=longSig ? color.new(#26a69a, 30) : shortSig ? color.new(#ef5350, 30) : color.new(#363a45, 30))
+    table.merge_cells(vt, 1, 11, 2, 11)
+
+// ── alert JSON → JARVIS webhook (/api/tradingview) ────────────────────────────
+if (longSig or shortSig) and fireAlerts and barstate.isconfirmed
+    act   = longSig ? "long" : "short"
+    dir   = longSig ? 1 : -1
+    stopP = close - dir * atrStop * atr14
+    risk  = math.abs(close - stopP)
+    msg = '{"secret":"' + tvSecret + '","symbol":"' + syminfo.ticker + '","action":"' + act + '"' +
+         (inclPrice ?
+             ',"entry_price":' + str.tostring(close, format.mintick) +
+             ',"stop_loss":'   + str.tostring(stopP, format.mintick) +
+             ',"targets":['   + str.tostring(close + dir * t1r * risk, format.mintick) + "," +
+                                str.tostring(close + dir * t2r * risk, format.mintick) + "," +
+                                str.tostring(close + dir * t3r * risk, format.mintick) + "]" : "") +
+         ',"signal_score":' + str.tostring(score, "#.##") + '}'
+    alert(msg, alert.freq_once_per_bar_close)
+
+// ── classic alert conditions (alternative to the webhook JSON) ────────────────
+alertcondition(longSig,  "JARVIS LONG",  "JARVIS LONG {{ticker}} @ {{close}}")
+alertcondition(shortSig, "JARVIS SHORT", "JARVIS SHORT {{ticker}} @ {{close}}")

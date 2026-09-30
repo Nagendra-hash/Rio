@@ -317,7 +317,6 @@ def _screen_find(description: str) -> tuple[int, int] | None:
         return None
 
     try:
-        from google import genai
         from google.genai import types as gtypes
 
         _require_pyautogui()
@@ -327,7 +326,6 @@ def _screen_find(description: str) -> tuple[int, int] | None:
         img.save(buf, format="PNG")
         image_bytes = buf.getvalue()
 
-        client = genai.Client(api_key=api_key)
         prompt = (
             f"This is a screenshot of a {w}×{h} pixel screen. "
             f"Locate the UI element described as: '{description}'. "
@@ -335,13 +333,15 @@ def _screen_find(description: str) -> tuple[int, int] | None:
             f"If the element is not visible, reply: NOT_FOUND"
         )
 
-        response = client.models.generate_content(
-            model="gemini-flash-lite-latest",
-            contents=[
-                gtypes.Part.from_bytes(data=image_bytes, mime_type="image/png"),
-                prompt,
-            ],
+        # Mark-LIV ladder: FAST tier + 20s deadline. The ladder accepts the
+        # SDK's Part objects directly, images included.
+        from core import gemini
+        response = gemini.call(
+            [gtypes.Part.from_bytes(data=image_bytes, mime_type="image/png"), prompt],
+            tier=gemini.FAST, timeout_ms=20_000,
         )
+        if response is None:
+            return None
 
         text = (response.text or "").strip()
         if "NOT_FOUND" in text.upper():

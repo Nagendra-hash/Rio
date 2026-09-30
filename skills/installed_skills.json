@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "skills": {
+    "vibe-trading": {
+      "name": "vibe-trading",
+      "source": "https://github.com/HKUDS/Vibe-Trading",
+      "ref": "main",
+      "capability": "knowledge",
+      "skill_md": "agent/SKILL.md",
+      "installed_at": "2026-09-28T21:12:45Z",
+      "hash": "e2c8da771f4f870a1964f9d31e90534b7e4a65d7005e9216532fe4d705525576",
+      "enabled": true,
+      "description": "Professional finance research toolkit — backtesting (10 engines + benchmark comparison panel), factor analysis, Alpha Zoo (462 pre-built alphas across qlib158/alpha101/gtja191/academic/fundamental), o"
+    },
+    "pdf": {
+      "name": "pdf",
+      "source": "https://github.com/anthropics/skills/tree/main/skills/pdf",
+      "ref": "main",
+      "capability": "knowledge",
+      "skill_md": "SKILL.md",
+      "installed_at": "2026-09-28T21:47:39Z",
+      "hash": "6a01b6dc757b8856d7eba5e9985d8550783f946d7afdf86402ba324b93239fc0",
+      "enabled": true,
+      "description": "Use this skill whenever the user wants to do anything with PDF files. This includes reading or extracting text/tables from PDFs, combining or merging multiple PDFs into one, splitting PDFs apart, rota"
+    }
+  }
+}

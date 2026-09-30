@@ -1,0 +1,28 @@
+# ngrok config — JARVIS TradingView webhook tunnel
+# ─────────────────────────────────────────────────────────────────────────────
+# Used by ./tunnel_tv.sh. Exposes the local dashboard (port 8000) so
+# TradingView's cloud servers can reach /api/tradingview — they cannot hit
+# 192.168.x.x LAN addresses. The dashboard PORT in dashboard/server.py is 8000.
+#
+# One-time setup:
+#   1. Sign up free:  https://dashboard.ngrok.com/signup
+#   2. Save your authtoken (dashboard → "Your Authtoken"):
+#        ~/.local/bin/ngrok config add-authtoken <YOUR_TOKEN>
+#      (or export NGROK_AUTHTOKEN=<YOUR_TOKEN> before running ./tunnel_tv.sh)
+#
+# The domain below is the account's free static domain (ngrok reserves one per
+# free account) — pinned here so the URL survives agent restarts AND reboots.
+# TradingView's webhook and the phone bookmark therefore never need updating.
+# Request inspector while running: http://localhost:4040
+# ─────────────────────────────────────────────────────────────────────────────
+version: 3
+
+tunnels:
+  tradingview:
+    proto: http
+    # Free static domain (reserved to this account) — no more rotating URLs.
+    domain: "uneasy-entwine-swimmable.ngrok-free.dev"
+    # Dashboard upstream. When config/certs/ exists, port 8000 speaks TLS —
+    # keep the https:// scheme in sync with make_certs.sh. Upstream TLS
+    # verification is off by default, so our locally-signed cert just works.
+    addr: "https://localhost:8000"

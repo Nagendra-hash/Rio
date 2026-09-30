@@ -2,8 +2,16 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>JARVIS Dashboard</title>
+  <meta name="theme-color" content="#07090f">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="JARVIS">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/static/icons/icon-192.png" type="image/png">
+  <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
   <script src="/static/crypto.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -131,17 +139,329 @@
       pointer-events:none; white-space:nowrap;
     }
     #toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+
+    /* ── SETTINGS ── */
+    /* ── TRADING OVERLAY ── */
+    #trading-overlay {
+      display:none; position:fixed; inset:0; z-index:200;
+      background:rgba(0,0,0,0.6); backdrop-filter:blur(3px);
+      align-items:center; justify-content:center; padding:16px;
+    }
+    #trading-overlay.show { display:flex; }
+    #trading-panel {
+      width:min(560px, 100%); max-height:82vh; overflow-y:auto;
+      background:#0b0e16; border:1px solid var(--border); border-radius:16px;
+      padding:18px; display:flex; flex-direction:column; gap:14px;
+    }
+    #trading-panel::-webkit-scrollbar { width:3px; }
+    #trading-panel::-webkit-scrollbar-thumb { background:var(--border); border-radius:3px; }
+    #kill-zone {
+      background:rgba(248,113,113,0.06); border:1px solid rgba(248,113,113,0.3);
+      border-radius:12px; padding:14px;
+    }
+    #kill-btn {
+      width:100%; padding:12px; border:none; border-radius:10px; cursor:pointer;
+      background:rgba(248,113,113,0.14); color:#f87171;
+      font-size:13px; font-weight:800; letter-spacing:2px;
+      border:1px solid rgba(248,113,113,0.4); transition:all .15s;
+    }
+    #kill-btn:hover { background:#f87171; color:#0b0e16; }
+    #kill-btn.armed { background:#f87171; color:#0b0e16; animation:blink 1s infinite; }
+    .tv-list {
+      display:flex; flex-direction:column; gap:4px; max-height:200px; overflow-y:auto;
+      font-size:11.5px; font-family:ui-monospace,monospace;
+      background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:8px;
+    }
+    .tv-list::-webkit-scrollbar { width:3px; }
+    .tv-list::-webkit-scrollbar-thumb { background:var(--border); }
+    .tv-row { display:flex; gap:8px; align-items:baseline; }
+    .tv-ts { color:var(--muted); flex-shrink:0; }
+    .tv-tag { flex-shrink:0; font-weight:700; padding:0 5px; border-radius:4px; }
+    .tv-tag.queued  { color:var(--accent); background:var(--adim); }
+    .tv-tag.trade   { color:var(--green);  background:var(--gdim); }
+    .tv-tag.rejected,.tv-tag.error { color:#f87171; background:rgba(248,113,113,0.1); }
+    .tv-tag.kill    { color:#fbbf24; background:rgba(251,191,36,0.12); }
+    .tv-detail { color:var(--text); word-break:break-all; }
+    .tv-empty { color:var(--muted); font-style:italic; }
+    #mode-badge.live { color:#fbbf24; border-color:rgba(251,191,36,0.4); }
+    #mode-badge.paper { color:var(--green); border-color:rgba(34,197,94,0.3); }
+
+    #settings-btn, #chart-btn, #install-btn {
+      background:var(--surface); border:1px solid var(--border); color:var(--muted);
+      width:34px; height:34px; border-radius:10px; font-size:16px; line-height:1;
+      cursor:pointer; transition:opacity .15s, border-color .15s, color .15s; flex-shrink:0;
+    }
+    #settings-btn:hover, #chart-btn:hover, #install-btn:hover { opacity:.85; border-color:var(--accent); color:var(--accent); }
+    #install-btn { display:none; }
+    #install-btn.show { display:block; color:var(--accent); border-color:rgba(99,102,241,0.45); animation:blink 2.5s infinite; }
+
+    /* ── INSTALL DEBUG BADGE (tap to expand diagnostics) ── */
+    #pwa-badge {
+      font-size: 9px; font-weight: 700; letter-spacing: 1px; padding: 4px 8px;
+      border-radius: 6px; background: var(--surface); border: 1px solid var(--border);
+      color: var(--muted); font-family: monospace; cursor: pointer; flex-shrink: 0;
+      user-select: none; -webkit-user-select: none; max-width: 86px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    #pwa-badge.ok    { color: var(--green);  border-color: rgba(34,197,94,0.35); }
+    #pwa-badge.warn  { color: #fbbf24;       border-color: rgba(251,191,36,0.4); }
+    #pwa-badge.bad   { color: #f87171;       border-color: rgba(255,100,100,0.3); }
+    #pwa-panel {
+      position: fixed; inset: 0; background: rgba(0,0,0,.55); backdrop-filter: blur(3px);
+      display: none; align-items: flex-end; justify-content: center; z-index: 60;
+    }
+    #pwa-panel.show { display: flex; }
+    #pwa-panel-card {
+      background: var(--bg); border: 1px solid var(--border); border-bottom: none;
+      border-radius: 18px 18px 0 0; width: 100%; max-width: 520px;
+      padding: 20px 18px 26px; animation: slideup .22s ease;
+    }
+    #pwa-panel .pwa-row {
+      display: flex; justify-content: space-between; gap: 10px;
+      padding: 7px 0; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 12px;
+    }
+    #pwa-panel .pwa-k { color: var(--muted); flex-shrink: 0; }
+    #pwa-panel .pwa-v { text-align: right; font-family: monospace; word-break: break-word; }
+    #pwa-panel .pwa-v.ok  { color: var(--green); }
+    #pwa-panel .pwa-v.bad { color: #f87171; }
+    #pwa-panel .pwa-v.warn { color: #fbbf24; }
+    #pwa-panel .pwa-fix {
+      margin-top: 14px; padding: 10px 12px; border-radius: 10px;
+      background: rgba(251,191,36,0.06); border: 1px solid rgba(251,191,36,0.25);
+      font-size: 12px; line-height: 1.6; color: #e5e7eb;
+    }
+    #pwa-panel .pwa-fix b { color: #fbbf24; }
+    #settings-overlay {
+      position:fixed; inset:0; background:rgba(0,0,0,.55); backdrop-filter:blur(3px);
+      display:none; align-items:flex-end; justify-content:center; z-index:50;
+    }
+    #settings-overlay.show { display:flex; }
+    #settings-panel {
+      background:var(--bg); border:1px solid var(--border); border-bottom:none;
+      border-radius:18px 18px 0 0; width:100%; max-width:520px;
+      padding:20px 18px 24px; animation:slideup .22s ease;
+    }
+    @keyframes slideup { from { transform:translateY(30px); opacity:0; } }
+    .set-title { font-size:13px; font-weight:800; letter-spacing:2px; text-transform:uppercase; color:var(--accent); margin-bottom:14px; }
+    .set-group { margin-bottom:16px; }
+    .set-lbl { font-size:10px; font-weight:700; letter-spacing:1.5px; text-transform:uppercase; color:var(--muted); margin-bottom:6px; }
+    .set-hint { font-size:11px; color:var(--muted); margin-top:6px; line-height:1.5; }
+    .set-hint a { color:var(--accent); text-decoration:none; font-weight:600; }
+    .set-row { display:flex; gap:8px; }
+    .set-input {
+      flex:1; min-width:0; padding:11px 13px; background:var(--surface);
+      border:1.5px solid var(--border); border-radius:11px; color:var(--text);
+      font-size:13px; outline:none; transition:border-color .15s;
+    }
+    .set-input:focus { border-color:var(--accent); }
+    .set-input::placeholder { color:var(--muted); }
+    .set-status { font-size:11px; margin-top:7px; min-height:15px; font-weight:600; }
+    .set-status.ok  { color:var(--green); }
+    .set-status.err { color:#f87171; }
+    .set-btn {
+      padding:11px 14px; border:none; border-radius:11px; font-size:10px; font-weight:800;
+      letter-spacing:1.5px; cursor:pointer; text-transform:uppercase; flex-shrink:0;
+      transition:opacity .15s, transform .1s;
+    }
+    .set-btn:active { transform:scale(.96); }
+    .set-btn.primary { background:var(--accent); color:#fff; }
+    .set-btn.ghost { background:var(--surface); border:1px solid var(--border); color:var(--text); }
+
+    /* ── Standalone (installed PWA): keep content clear of notches/status bar ── */
+    @supports (padding: env(safe-area-inset-top)) {
+      header { padding-top: calc(12px + env(safe-area-inset-top)); }
+      footer { padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
+    }
+
+    /* ── OFFLINE SCREEN ──
+       Shown when the PC is unreachable (or the phone has no network at all).
+       The installed standalone app sits on this screen instead of a frozen or
+       half-dead dashboard, and recovers automatically. */
+    #offline-screen {
+      display:none; position:fixed; inset:0; z-index:400;
+      background:var(--bg);
+      flex-direction:column; align-items:center; justify-content:center;
+      gap:14px; padding:32px; text-align:center;
+    }
+    #offline-screen.show { display:flex; }
+    .of-icon {
+      width:88px; height:88px; border-radius:26px;
+      background:linear-gradient(160deg, #4f46e5, #7c3aed);
+      display:flex; align-items:center; justify-content:center;
+      font-size:40px; font-weight:800; color:#fff; letter-spacing:1px;
+      margin-bottom:6px; user-select:none;
+    }
+    .of-title { font-size:19px; font-weight:800; letter-spacing:1px; }
+    .of-detail { font-size:13px; color:var(--muted); line-height:1.6; max-width:340px; }
+    .of-detail b { color:var(--text); }
+    .of-hint { font-size:11px; color:var(--muted); opacity:0.75; line-height:1.6; }
+    #of-retry {
+      margin-top:8px; padding:12px 30px; border:none; border-radius:12px;
+      background:var(--accent); color:#fff; font-size:11px; font-weight:800;
+      letter-spacing:2px; cursor:pointer; transition:opacity .15s, transform .1s;
+    }
+    #of-retry:active { transform:scale(.96); }
+    #of-retry:disabled { opacity:.5; }
+    @keyframes of-spin { to { transform:rotate(360deg); } }
+    #of-retry.busy::after {
+      content:'⋯'; display:inline-block; margin-left:8px;
+      animation:of-spin 1.2s linear infinite;
+    }
   </style>
 </head>
 <body>
   <div id="toast"></div>
+
+  <!-- ── OFFLINE SCREEN (PC unreachable / phone offline) ───────────────────── -->
+  <div id="offline-screen">
+    <div class="of-icon">J</div>
+    <div class="of-title" id="of-title">Can't reach JARVIS</div>
+    <div class="of-detail" id="of-detail">Checking the connection…</div>
+    <button id="of-retry" onclick="offlineRetry()">RETRY NOW</button>
+    <div class="of-hint">Auto-retrying — this screen closes the moment JARVIS answers.<br>
+      Check that the PC running JARVIS is on and on the same network (or the tunnel is up).</div>
+  </div>
+
   <header>
     <div class="logo"><em>J</em>ARVIS</div>
     <div class="pill" id="pill"><span class="dot"></span><span id="st">Connecting</span></div>
     <div class="enc-badge" id="enc">AES-256</div>
     <div class="spacer"></div>
     <div class="url">__IP__:__PORT__</div>
+    <div class="url" id="mode-badge" title="Live trading status" onclick="openTrading()" style="cursor:pointer">…</div>
+    <button id="chart-btn" onclick="openLiveChart()" title="Live chart (last discussed symbol)">📈</button>
+    <button id="install-btn" onclick="installPwa()" title="Install JARVIS as a phone app">⤓</button>
+    <div id="pwa-badge" onclick="openPwaPanel()" title="PWA / install diagnostics">…</div>
+    <button id="settings-btn" onclick="openSettings()" title="Settings">⚙</button>
   </header>
+
+  <!-- ── PWA DIAGNOSTICS PANEL (tap the SW badge) ───────────────────────── -->
+  <div id="pwa-panel" onclick="if(event.target===this)closePwaPanel()">
+    <div id="pwa-panel-card">
+      <div class="set-title" style="display:flex;justify-content:space-between;align-items:center">
+        <span>📲 Install diagnostics</span>
+        <span onclick="closePwaPanel()" style="cursor:pointer;font-size:18px;color:var(--muted)">✕</span>
+      </div>
+      <div id="pwa-rows"></div>
+      <div id="pwa-fix" class="pwa-fix" style="display:none"></div>
+    </div>
+  </div>
+
+  <!-- ── TRADING OVERLAY ─────────────────────────────────────────────────── -->
+  <div id="trading-overlay" onclick="if(event.target===this)closeTrading()">
+    <div id="trading-panel">
+      <div class="set-title">🛡 Trading</div>
+      <div id="kill-zone">
+        <button id="kill-btn" onclick="doKill()">⛔ KILL SWITCH</button>
+        <div class="set-hint" style="margin-top:8px">
+          Flattens every position, cancels every open order (spot + futures) and
+          switches to paper mode immediately. Also available by voice:
+          <span style="font-family:monospace">"kill switch"</span>.
+        </div>
+        <div id="kill-status" class="set-status"></div>
+      </div>
+      <div class="set-group">
+        <div class="set-lbl">Webhook alert history (TradingView → JARVIS)</div>
+        <div id="tv-alerts" class="tv-list"><div class="tv-empty">Loading…</div></div>
+        <div class="set-hint">Alerts POST to <span style="font-family:monospace">/api/tradingview</span> with your static token as <span style="font-family:monospace">secret</span>.</div>
+      </div>
+      <div class="set-group">
+        <div class="set-lbl">Recent trade fills & kill events</div>
+        <div id="trade-fills" class="tv-list"><div class="tv-empty">Loading…</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── SETTINGS OVERLAY ─────────────────────────────────────────────────── -->
+  <div id="settings-overlay" onclick="if(event.target===this)closeSettings()">
+    <div id="settings-panel">
+      <div class="set-title">⚙ Settings</div>
+      <div class="set-group">
+        <div class="set-lbl">NewsAPI key (newsapi.org)</div>
+        <div class="set-row">
+          <input id="newsapi-input" class="set-input" placeholder="Paste your NewsAPI key…" autocomplete="off">
+          <button class="set-btn ghost" onclick="testNewsKey()" id="newsapi-test">TEST</button>
+          <button class="set-btn primary" onclick="saveNewsKey()" id="newsapi-save">SAVE</button>
+        </div>
+        <div id="newsapi-status" class="set-status"></div>
+        <div class="set-hint">
+          Optional — live news headlines from <a href="https://newsapi.org/register" target="_blank" rel="noopener">newsapi.org</a>.
+          Free tier: 100 requests/day. When set, JARVIS uses it first for news;
+          without it, Gemini & DuckDuckGo handle news as before.
+        </div>
+      </div>
+      <div class="set-group">
+        <div class="set-lbl">API access token (scripts / curl)</div>
+        <div class="set-row">
+          <input id="dashtoken-input" class="set-input" placeholder="Set a static token…" autocomplete="off">
+          <button class="set-btn ghost" onclick="genDashToken()" id="dashtoken-gen">GENERATE</button>
+          <button class="set-btn primary" onclick="saveDashToken()" id="dashtoken-save">SAVE</button>
+        </div>
+        <div id="dashtoken-status" class="set-status"></div>
+        <div class="set-hint">
+          Optional — lets scripts and <a href="#" onclick="event.preventDefault();showCurl()" rel="noopener">curl</a> call the
+          dashboard API without pairing. Requests then need
+          <span style="font-family:monospace">Authorization: Bearer &lt;token&gt;</span>. Leave empty to disable;
+          saving a new value revokes nothing else. Session pairing via QR keeps working either way.
+        </div>
+      </div>
+      <div class="set-group">
+        <div class="set-lbl">Phone pairing — talk to JARVIS from your phone</div>
+        <div class="set-row">
+          <button class="set-btn primary" onclick="phonePair()" id="phone-pair-btn">GENERATE QR</button>
+          <button class="set-btn ghost" onclick="phoneStatus()" id="phone-status-btn">STATUS</button>
+          <button class="set-btn ghost" onclick="phoneRevoke()" id="phone-revoke-btn">REVOKE</button>
+        </div>
+        <div id="phone-pair-status" class="set-status"></div>
+        <div id="phone-pair-qr" style="display:none;text-align:center;margin:10px 0 6px">
+          <img id="phone-qr-img" alt="Pairing QR" style="width:200px;height:200px;border-radius:8px;background:#fff;padding:6px">
+        </div>
+        <div class="set-row" id="phone-link-row" style="display:none">
+          <input id="phone-link-input" class="set-input" readonly onclick="this.select()" style="font-family:monospace;font-size:11px">
+          <button class="set-btn ghost" onclick="phoneCopyLink()" id="phone-copy-btn">COPY</button>
+        </div>
+        <div class="set-hint">
+          One-time key, valid <strong>5 minutes</strong>. On the phone: scan the QR (or open the copied link in
+          Chrome) → the dashboard opens, already logged in. Then tap <strong>🎤</strong> in the dashboard and just
+          speak — your phone's microphone becomes JARVIS's ears, replies play on the phone. Nothing to install:
+          any browser works. The phone stays paired after the key expires.
+          <br><br>
+          <strong>💡 Tip:</strong> install the dashboard as an app (⤓ button in the header, or Chrome ⋮ →
+          <em>Add to Home screen</em>). The installed app keeps its own window, survives backgrounding much better,
+          and reopens instantly from your home screen.
+        </div>
+      </div>
+    </div>
+      <div class="set-group">
+        <div class="set-lbl">Push-to-talk (hold-to-talk hotkey)</div>
+        <div class="set-row">
+          <button class="set-btn primary" id="ptt-toggle-btn" onclick="togglePTT()">ENABLE</button>
+          <button class="set-btn ghost" onclick="refreshPTT()" id="ptt-refresh-btn">REFRESH</button>
+        </div>
+        <div id="ptt-status" class="set-status"></div>
+        <div class="set-hint">
+          Mark-LIV push-to-talk: while enabled, JARVIS's microphone stays closed unless you hold
+          <span id="ptt-chord" style="font-family:monospace">Ctrl+Space</span> on the PC (or the on-screen
+          hold button in the desktop app). Nothing is streamed while the key is up — even in wake-word mode.
+        </div>
+      </div>
+      <div class="set-group">
+        <div class="set-lbl">Gemini one-shot client (side calls)</div>
+        <div class="set-row">
+          <button class="set-btn ghost" onclick="refreshGemini()" id="gemini-refresh-btn">STATUS</button>
+          <button class="set-btn ghost" onclick="geminiRefreshKey()" id="gemini-key-btn">RE-READ KEY</button>
+          <button class="set-btn ghost" onclick="geminiClearCooldowns()" id="gemini-cool-btn">CLEAR COOLDOWNS</button>
+        </div>
+        <div id="gemini-status" class="set-status"></div>
+        <div class="set-hint">
+          All one-shot Gemini calls (summaries, tool side-requests) walk one ladder: the Live model first —
+          it draws on a separate quota pool from the text models — then pinned REST models, then
+          <span style="font-family:monospace">-latest</span> aliases. A rung that answers 429 is skipped
+          for 5 minutes; CLEAR COOLDOWNS retries it right away.
+        </div>
+      </div>
+    </div>
+  </div>
   <main id="feed"></main>
   <footer>
     <input id="inp" placeholder="Send a command to JARVIS…" autocomplete="off">
@@ -156,16 +476,310 @@
     // ── Auth — bearer token ───────────────────────────────────────────────────
     const _authToken  = sessionStorage.getItem('jarvis_token');
     const _sessionKey = sessionStorage.getItem('jarvis_key');
+    const _deviceToken = localStorage.getItem('jarvis_device_token') || '';
 
-    if (!_authToken) {
-      location.replace('/login');
+    // ── Stable pairing: silent device re-login ────────────────────────────
+    // The SESSION token lives in sessionStorage (wiped whenever the phone
+    // browser closes). The DEVICE token lives in localStorage (persistent).
+    // After one QR pairing, a returning phone silently exchanges its device
+    // token for a fresh session via /api/device-login — no QR, no pairing
+    // code, no USB/WiFi debugging — from the home LAN or through the public
+    // tunnel (10 km away works the same).
+    async function _deviceLogin() {
+      if (!_deviceToken) return false;
+      try {
+        const r = await fetch('/api/device-login', {
+          method: 'POST',
+          // ngrok-skip-browser-warning: through the public tunnel, ngrok's
+          // free-tier interstitial would otherwise answer fetches with its
+          // HTML warning page instead of our JSON.
+          headers: { 'Content-Type': 'application/json',
+                     'ngrok-skip-browser-warning': '1' },
+          body: JSON.stringify({ device_token: _deviceToken }),
+        });
+        if (!r.ok) return false;
+        const d = await r.json();
+        if (!d.ok || !d.token) return false;
+        sessionStorage.setItem('jarvis_token', d.token);
+        if (d.key) sessionStorage.setItem('jarvis_key', d.key);
+        return true;
+      } catch { return false; }
     }
 
-    function _authHeader() { return { 'Authorization': `Bearer ${_authToken}` }; }
-    function _authFetch(url, opts = {}) {
+    (async function _authBoot() {
+      if (_authToken) return;                        // normal path
+      // No session at all (fresh standalone-app launch, cold start): try one
+      // device re-login; if the network is down, park on the offline screen
+      // instead of bouncing to /login and losing the way back. Deferred —
+      // _offline/_ws* below aren't initialized until this script finishes.
+      if (_deviceToken && !navigator.onLine) {
+        setTimeout(() => _offline.show('phone'), 0);
+        return;
+      }
+      if (_deviceToken) {
+        if (sessionStorage.getItem('jarvis_relogin_attempted')) {
+          sessionStorage.removeItem('jarvis_relogin_attempted');
+          location.replace('/login');                // one silent retry max
+          return;
+        }
+        sessionStorage.setItem('jarvis_relogin_attempted', '1');
+        if (await _deviceLogin()) {
+          location.reload();                         // re-init with fresh session
+          return;
+        }
+        sessionStorage.removeItem('jarvis_relogin_attempted');
+      }
+      location.replace('/login');                    // never paired → QR once
+    })();
+
+    function _authHeader() { return { 'Authorization': `Bearer ${_authToken}`, 'ngrok-skip-browser-warning': '1' }; }
+    async function _authFetch(url, opts = {}) {
       opts.headers = Object.assign({}, opts.headers, _authHeader());
-      return fetch(url, opts);
+      let r;
+      try {
+        r = await fetch(url, opts);
+      } catch (e) {
+        // Network-level failure (Wi-Fi drop, PC asleep, tunnel down). This is
+        // the definitive signal the PC is unreachable — surface it.
+        _offline.note('fetch');
+        throw e;
+      }
+      // Session lost mid-use (app restart) → one silent device re-login.
+      if (r.status === 401 && _deviceToken && !opts._retried
+          && !sessionStorage.getItem('jarvis_relogin_attempted')) {
+        sessionStorage.setItem('jarvis_relogin_attempted', '1');
+        if (await _deviceLogin()) {
+          sessionStorage.removeItem('jarvis_relogin_attempted');
+          location.reload();
+        }
+      }
+      return r;
     }
+
+    // ── Offline screen — PC unreachable from the installed app ───────────────
+    // The phone going offline (Wi-Fi off) and the PC going unreachable (asleep,
+    // tunnel down) look identical to a dead socket, so the screen distinguishes
+    // them via navigator.onLine and heals automatically: it rides the same
+    // backoff loop as the data socket and closes itself on the first live pong.
+    const _offline = {
+      shown: false,
+      note(source) {
+        if (source === 'ws') {
+          if (!navigator.onLine) this.show('phone');
+          // Online but the socket died: one drop is usually Android freezing
+          // the tab (heals on the first reconnect), so stay quiet until the
+          // reconnect loop has actually failed a couple of times — that is a
+          // real outage, not a freeze.
+          else if (this.shown || _wsTries >= 2) this.show('pc');
+        } else if (source === 'fetch') {
+          this.show(navigator.onLine ? 'pc' : 'phone');
+        }
+      },
+      show(kind) {
+        const scr = document.getElementById('offline-screen');
+        if (!scr) return;
+        this.shown = true;
+        document.getElementById('of-title').textContent =
+          kind === 'phone' ? 'Phone is offline' : "Can't reach JARVIS";
+        document.getElementById('of-detail').innerHTML = kind === 'phone'
+          ? 'This device has no internet connection. Reconnect Wi‑Fi or mobile data — the dashboard resumes automatically.'
+          : 'The phone is online, but <b>JARVIS on your PC is unreachable</b>. Is the PC asleep, or is the tunnel down?';
+        if (!scr.classList.contains('show')) {
+          scr.classList.add('show');
+          this._poke();
+        }
+      },
+      hide() {
+        const scr = document.getElementById('offline-screen');
+        this.shown = false;
+        if (scr) scr.classList.remove('show');
+      },
+      _poke() {
+        // Nudge the reconnect loop immediately instead of waiting out the
+        // current backoff timer.
+        clearTimeout(_wsTimer);
+        if (!ws || ws.readyState > 1) { _wsTries = 0; _wsConnect(); }
+        else if (ws.readyState === 1) { try { ws.close(); } catch (_) {} }
+      },
+    };
+
+    function offlineRetry() {
+      const btn = document.getElementById('of-retry');
+      btn.disabled = true; btn.classList.add('busy');
+      // _poke forces a fresh socket; the busy flag clears when it opens (or
+      // the next close re-shows the screen with a live button again).
+      _offline._poke();
+      setTimeout(() => { btn.disabled = false; btn.classList.remove('busy'); }, 4000);
+      // No session token at all → pairing flow, not connectivity, is the issue.
+      if (!sessionStorage.getItem('jarvis_token') && _deviceToken) {
+        _deviceLogin().then(ok => { if (ok) location.reload(); });
+      }
+    }
+
+    // Browser-level connectivity events (installed apps get these too).
+    addEventListener('online',  () => { if (_offline.shown) _offline._poke(); });
+    addEventListener('offline', () => _offline.show('phone'));
+
+    // ── PWA install & service worker ─────────────────────────────────────────
+    // Installed standalone, the dashboard is treated much closer to a native
+    // app: it lives in its own window, Android throttles it less aggressively
+    // when backgrounded, and reopening it from the launcher restores the last
+    // session instead of a cold tab. The SW itself is a pass-through (no
+    // caching) — this app is only ever useful when the PC is reachable.
+    let _pwaPrompt = null;                         // stashed beforeinstallprompt
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      _pwaPrompt = e;
+      _pwaState.prompt = true;
+      _pwaRefreshBadge();
+      const btn = document.getElementById('install-btn');
+      if (btn && !isStandalone()) { btn.classList.add('show'); sys('💡 Install JARVIS as an app (⤓) — it survives backgrounding far better as an installed app.'); }
+    });
+    window.addEventListener('appinstalled', () => {
+      document.getElementById('install-btn')?.classList.remove('show');
+      _pwaPrompt = null;
+      _pwaState.prompt = false;
+      _pwaRefreshBadge();
+      toast('JARVIS installed 🎉');
+      sys('App installed — launch JARVIS from your home screen from now on.');
+    });
+
+    function isStandalone() {
+      return window.matchMedia('(display-mode: standalone)').matches
+          || window.navigator.standalone === true;   // iOS Safari
+    }
+
+    async function installPwa() {
+      const btn = document.getElementById('install-btn');
+      if (!_pwaPrompt) {
+        // No browser prompt available (already installed, iOS, or unsupported).
+        if (isStandalone()) { toast('Already running as an app'); return; }
+        sys('No one-tap install here. On Android Chrome: ⋮ menu → "Add to Home screen" / "Install app".');
+        toast('Use browser menu to install');
+        return;
+      }
+      btn.classList.remove('show');
+      _pwaPrompt.prompt();
+      const { outcome } = await _pwaPrompt.userChoice.catch(() => ({ outcome: 'dismissed' }));
+      if (outcome === 'accepted') toast('Installing…');
+      _pwaPrompt = null;
+    }
+
+    // Register the pass-through SW (required for installability). Any secure
+    // context works: HTTPS anywhere, and localhost/127.0.0.1 over HTTP (e.g.
+    // SSH tunnels, adb reverse). Plain-HTTP LAN IPs can't register — install
+    // then works via the browser menu where the platform allows it.
+    //
+    // Registration state is TRACKED (not swallowed) and surfaced in the header
+    // SW badge + tap-to-expand diagnostics: the classic phone failure is a
+    // bypassed self-signed-cert origin, where the page works but Chrome
+    // refuses service-worker registration and silently withholds the install
+    // prompt. Without this, that failure is invisible.
+    const _pwaState = {
+      secure: null,          // secure context?
+      standalone: null,      // display-mode: standalone?
+      swAPI: null,           // 'serviceWorker' in navigator?
+      controller: null,      // SW actively controlling this page?
+      swReg: null,           // ServiceWorkerRegistration | null
+      swErr: null,           // first registration error (string)
+      prompt: false,         // beforeinstallprompt seen?
+    };
+
+    function _pwaRefreshBadge() {
+      const b = document.getElementById('pwa-badge');
+      if (!b) return;
+      let label, cls;
+      if (!_pwaState.standalone && _pwaState.prompt)       { label = 'SW ✓ ⤓'; cls = 'ok'; }
+      else if (_pwaState.controller)                       { label = 'SW ✓';   cls = 'ok'; }
+      else if (_pwaState.secure === false)                 { label = 'HTTP ✗'; cls = 'bad'; }
+      else if (_pwaState.swErr)                            { label = 'SW ✗';   cls = 'bad'; }
+      else if (_pwaState.secure === null)                  { label = 'SW…';    cls = 'warn'; }
+      else                                                 { label = 'SW ⏳';  cls = 'warn'; }
+      b.textContent = label;
+      b.className = cls;
+    }
+
+    function _pwaRows() {
+      const s = _pwaState;
+      const yn = (v, warn) => v === null ? ['…', ''] : v ? ['yes ✓', 'ok'] : [warn || 'no ✗', warn ? 'warn' : 'bad'];
+      const rows = [
+        ['Secure context',    ...yn(s.secure, 'plain HTTP — install prompt blocked by Chrome')],
+        ['Running as app',    ...yn(s.standalone, null)],
+        ['ServiceWorker API', ...yn(s.swAPI)],
+        ['SW controls page',  ...yn(s.controller, 'SW not active yet')],
+        ['Install prompt',    s.prompt ? ['available ⤓', 'ok'] : ['not yet', 'warn'], ],
+      ];
+      if (s.swErr) rows.push(['SW error', [s.swErr, 'bad']]);
+      return rows;
+    }
+
+    function _pwaVerdict() {
+      const s = _pwaState;
+      if (s.standalone) {
+        return '<b>Running as an installed app</b> — no install prompt needed here. ' +
+               'If the PC becomes unreachable you will see the offline screen automatically.';
+      }
+      if (s.prompt) {
+        return '<b>Ready to install.</b> Tap the ⤓ button in the header → Install. ' +
+               'JARVIS will appear in your launcher with its own icon.';
+      }
+      if (s.secure === false) {
+        return '<b>No install prompt over plain HTTP.</b> Open the dashboard via ' +
+               '<b>https://</b> (ports 8000/8001, accept the cert warning) — or use Chrome ' +
+               'menu ⋮ → "Add to Home screen", which also works on HTTP.';
+      }
+      if (s.swErr) {
+        return '<b>Chrome refused the service worker.</b> If you opened this via HTTPS and ' +
+               '<i>accepted a red certificate warning</i>, Chrome treats the site as untrusted ' +
+               'and blocks service workers — the page works, but install is silently disabled. ' +
+               '<b>Fix (once):</b> install the JARVIS CA on this phone — open ' +
+               '<b>https://&lt;pc-ip&gt;:8000/ca.crt</b> → download → Android Settings → ' +
+               'Security → Install a certificate → CA certificate — then fully restart Chrome.';
+      }
+      if (s.controller === false) {
+        return '<b>Service worker registered but not active yet.</b> Wait a few seconds; if ' +
+               'this persists, hard-refresh the page once.';
+      }
+      return '<b>Everything looks healthy.</b> Chrome shows the one-tap ⤓ install prompt once ' +
+             'it decides to (a few seconds on page, or after a visit or two). If it still never ' +
+             'appears: Chrome menu ⋮ → "Add to Home screen" always works as a fallback.';
+    }
+
+    function openPwaPanel() {
+      _pwaState.secure     = window.isSecureContext;
+      _pwaState.standalone = isStandalone();
+      _pwaState.swAPI      = 'serviceWorker' in navigator;
+      const rows = document.getElementById('pwa-rows');
+      rows.innerHTML = _pwaRows().map(([k, v, cls]) =>
+        `<div class="pwa-row"><span class="pwa-k">${k}</span><span class="pwa-v ${cls}">${v}</span></div>`
+      ).join('');
+      const fix = document.getElementById('pwa-fix');
+      fix.innerHTML = _pwaVerdict();
+      fix.style.display = 'block';
+      document.getElementById('pwa-panel').classList.add('show');
+    }
+    function closePwaPanel() { document.getElementById('pwa-panel').classList.remove('show'); }
+
+    (async () => {
+      _pwaState.secure = window.isSecureContext;
+      _pwaState.standalone = isStandalone();
+      _pwaState.swAPI = 'serviceWorker' in navigator;
+      _pwaRefreshBadge();
+      if (!_pwaState.swAPI || !_pwaState.secure) return;
+      try {
+        // Reuse an existing registration (e.g. page restored from BFCache) but
+        // still detect a dead/blocked worker through controller checks below.
+        _pwaState.swReg = await navigator.serviceWorker.register('/sw.js');
+      } catch (err) {
+        _pwaState.swErr = String(err && err.message || err);
+        _pwaRefreshBadge();
+        return;
+      }
+      const _ctl = () => { _pwaState.controller = !!navigator.serviceWorker.controller; _pwaRefreshBadge(); };
+      _ctl();
+      navigator.serviceWorker.addEventListener('controllerchange', _ctl);
+      _pwaState.swReg.addEventListener('updatefound', () => _pwaRefreshBadge());
+    })();
 
     // ── AES-256-CBC encryption (CryptoJS) ────────────────────────────────────
     const _AES_SALT = 'JARVIS-DASHBOARD-v1';
@@ -206,21 +820,264 @@
     const stTxt = document.getElementById('st');
     const wake  = document.getElementById('wake');
 
-    const _wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const _wsUrl   = `${_wsProto}://${location.host}/ws?token=${encodeURIComponent(_authToken)}`;
-    const ws       = new WebSocket(_wsUrl);
+    // Backgrounded Android tabs get their sockets killed by the OS, so this
+    // socket self-heals: exponential-backoff reconnects while hidden, an
+    // instant probe + reconnect the moment the tab is visible again, and a
+    // `since=<seq>` resume that replays only the messages missed in the gap.
+    let ws = null;                       // live socket (recreated on each retry)
+    let _wsEverOpened = false;
+    let _wsTries      = 0;
+    let _wsTimer      = null;
+    let _lastSeq      = 0;
+    let _bootId       = null;            // server lifetime id (from the last 'boot' msg)
 
-    ws.onopen    = () => { sys('Remote session active.'); toast('Connected to JARVIS'); };
-    ws.onclose   = () => sys('Connection lost — refresh to reconnect.');
-    ws.onerror   = () => sys('Connection error.');
-    ws.onmessage = (e) => {
-      const m = JSON.parse(e.data);
-      if (m.type === 'log')           append(m.speaker, m.text);
-      if (m.type === 'status')        setStatus(m.state);
-      if (m.type === 'wake')          sys('Wake word detected — connecting…');
-      if (m.type === 'sys')           sys(m.text);
-      if (m.type === 'file_received') _onFileReceived(m);
+    function _wsUrl(tok, dropSince) {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      const since = (_lastSeq && !dropSince) ? `&since=${_lastSeq}` : '';
+      const boot  = _bootId ? `&boot=${encodeURIComponent(_bootId)}` : '';
+      return `${proto}://${location.host}/ws?token=${encodeURIComponent(tok)}${since}${boot}`;
+    }
+
+    function _silentRepair() {
+      // Exchange the device token for a fresh session without reloading;
+      // resolves true when a new session is in place (caller reconnects).
+      if (!_deviceToken) return Promise.resolve(false);
+      return _deviceLogin().then(ok => { _wsTries = 0; return ok; });
+    }
+
+    function _wsSend(obj) {
+      try { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); } catch (_) {}
+    }
+
+    function _wsConnect() {
+      clearTimeout(_wsTimer);
+      // Read the token fresh: a silent device re-login may have refreshed it.
+      const tok = sessionStorage.getItem('jarvis_token');
+      if (!tok) return;
+      // After several failed resumes, drop the `since=` filter once: if the
+      // server restarted AND the backlog is gone, resume-with-gap could keep
+      // failing where a plain reconnect succeeds (it then replays the recent
+      // backlog — harmless duplicates beat a dead screen).
+      const dropSince = _wsTries >= 3;
+      const sock = new WebSocket(_wsUrl(tok, dropSince));
+      ws = sock;
+      sock.binaryType = 'arraybuffer';   // JARVIS voice arrives as PCM frames
+
+      sock.onopen = () => {
+        const first = !_wsEverOpened;
+        _wsEverOpened = true;
+        _wsTries = 0;
+        _offline.hide();
+        if (first) { sys('Remote session active.'); toast('Connected to JARVIS'); }
+        else       { sys('Reconnected to JARVIS.');   toast('Back online'); }
+        // Announce as phone so device commands (open WhatsApp, call, …) are
+        // routed to this handset rather than to a desktop tab.
+        _wsSend({ type: 'hello', role: 'phone' });
+      };
+      sock.onclose = (ev) => {
+        if (ws !== sock) return;         // a newer socket already took over
+        _offline.note('ws');
+        if (ev && ev.code === 4001) {
+          // Server explicitly rejected the token (PC restarted, memory lost)
+          // → re-pair in place from the device token and reconnect (no
+          // reload needed: _wsConnect reads the token fresh every attempt).
+          _silentRepair().then(ok => {
+            if (ok) { _wsTries = 0; _wsConnect(); }
+            else    _scheduleWsReconnect();
+          });
+          return;
+        }
+        // Opaque repeated failures (e.g. a pre-accept reject we couldn't
+        // identify) → try a silent re-pair once mid-loop before giving up.
+        if (_wsTries === 3 && _deviceToken) {
+          _silentRepair().then(ok => { if (ok) { _wsTries = 0; _wsConnect(); }
+                                       else _scheduleWsReconnect(); });
+          return;
+        }
+        _scheduleWsReconnect('Connection lost — reconnecting…');
+      };
+      sock.onerror = () => { /* onclose always follows */ };
+      sock.onmessage = (e) => {
+        if (e.data instanceof ArrayBuffer) { _playJarvisPcm(e.data); return; }   // JARVIS voice
+        let m; try { m = JSON.parse(e.data); } catch (_) { return; }
+        if (m.type === 'boot') {
+          if (_bootId && m.boot_id !== _bootId) _lastSeq = 0;   // server restarted → seq space reset
+          _bootId = m.boot_id;
+          if (typeof m.seq === 'number') _lastSeq = Math.max(_lastSeq, m.seq);
+          return;
+        }
+        if (m.seq) _lastSeq = Math.max(_lastSeq, m.seq);
+        if (m.type === 'log')         { trackChartCtx(m.text); append(m.speaker, m.text); }
+        if (m.type === 'status')        setStatus(m.state);
+        if (m.type === 'wake')          sys('Wake word detected — connecting…');
+        if (m.type === 'sys')           sys(m.text);
+        if (m.type === 'file_received') _onFileReceived(m);
+        if (m.type === 'phone_cmd')     _runPhoneCmd(m);
+      };
+    }
+
+    function _scheduleWsReconnect(msg) {
+      if (!sessionStorage.getItem('jarvis_token')) return;
+      if (msg) sys(msg);
+      const delay = Math.min(10000, 800 * Math.pow(2, _wsTries++));
+      clearTimeout(_wsTimer);
+      _wsTimer = setTimeout(_wsConnect, delay);
+    }
+    _wsConnect();
+
+    // Foreground return: Android may have silently killed the socket while the
+    // tab was frozen — probe it and force-reconnect on any sign of staleness.
+    // The status pill is a cheap proxy for reachability: while it never went
+    // active, a foregrounded app that still can't connect is shown the
+    // offline screen instead of being left on a dead "Connecting" page.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible') return;
+      if (!ws || ws.readyState > 1) {
+        if (document.getElementById('pill')?.classList.contains('on')) _offline.hide();
+        else if (_offline.shown || !ws) _offline.note('fetch');
+        _wsTries = 0; _wsConnect();
+        return;
+      }
+      const sock  = ws;
+      const probe = setTimeout(() => {           // no pong / no traffic → dead
+        if (ws === sock && sock.readyState === 1) { try { sock.close(); } catch (_) {} }
+      }, 3000);
+      sock.addEventListener('message', () => clearTimeout(probe), { once: true });
+      _wsSend({ type: 'ping' });
+    });
+
+    // ── Phone device control ────────────────────────────────────────────────
+    // JARVIS asks; the handset acts. Android opens apps via intent:// URLs and
+    // contacts via tel:/sms: — no USB debugging, no pairing dialogs.
+    function _runPhoneCmd(m) {
+      const action = m.action || '';
+      let url = null;
+      if (action === 'open_app') {
+        const app = (m.app || '').toLowerCase();
+        const pkg = m.package || _APP_PACKAGES[app] || '';
+        if (pkg) url = `intent://launch/?pkg=${pkg}#Intent;scheme=jarvis;action=android.intent.action.MAIN;package=${pkg};end`;
+      } else if (action === 'call') {
+        if (m.number) url = `tel:${m.number}`;
+      } else if (action === 'sms') {
+        if (m.number) url = `sms:${m.number}${m.text ? '?body=' + encodeURIComponent(m.text) : ''}`;
+      } else if (action === 'media') {
+        url = 'intent://media/#Intent;scheme=jarvis;action=android.intent.action.MEDIA_BUTTON;end';
+      } else if (action === 'alarm') {
+        const t = (m.time || '').replace(/[^0-9:]/g, '');
+        url = `intent://alarm/#Intent;scheme=jarvis;action=android.intent.action.SET_ALARM;i.android.intent.extra.alarm.HOUR=${parseInt((t.split(':')[0] || '7'), 10) || 7};i.android.intent.extra.alarm.MINUTES=${parseInt((t.split(':')[1] || '30'), 10) || 30};end`;
+      }
+      if (url) {
+        try { window.location.href = url; }
+        catch (_) { sys('Command blocked by browser.'); }
+      } else {
+        sys(`Unsupported command: ${action}`);
+      }
+    }
+    const _APP_PACKAGES = {
+      whatsapp:   'com.whatsapp',
+      telegram:   'org.telegram.messenger',
+      instagram:  'com.instagram.android',
+      youtube:    'com.google.android.youtube',
+      gmail:      'com.google.android.gm',
+      maps:       'com.google.android.apps.maps',
+      chrome:     'com.android.chrome',
+      camera:     'com.android.camera',
+      phone:      'com.google.android.dialer',
+      messages:   'com.google.android.apps.messaging',
+      settings:   'com.android.settings',
+      spotify:    'com.spotify.music',
+      paytm:      'net.one97.paytm',
+      gpay:       'com.google.android.apps.nbu.paisa.user',
+      phonepe:    'com.phonepe.app',
+      amazon:     'in.amazon.mShop.android.shopping',
+      flipkart:   'com.flipkart.android',
+      zomato:     'com.application.zomato',
+      swiggy:     'in.swiggy.android'
     };
+
+    // ── JARVIS voice playback (phone speaker) ──────────────────────────────
+    // The server mirrors JARVIS's 24 kHz/16-bit/mono PCM over this WebSocket.
+    // Android autoplay policy blocks audio until a user gesture, so the
+    // context is unlocked by any tap; before that, batches are announced,
+    // not played.
+    let _spkCtx = null, _spkGain = null, _spkNextTime = 0;
+    let _spkBuf = [], _spkFlushTimer = null, _spkHintShown = false;
+
+    function _speakerUnlock() {
+      if (!_spkCtx) {
+        try { _spkCtx = new AudioContext({ sampleRate: 24000 }); } catch (_) { return; }
+        _spkGain = _spkCtx.createGain();
+        _spkGain.gain.value = 1.0;
+        _spkGain.connect(_spkCtx.destination);
+      }
+      if (_spkCtx.state === 'suspended') _spkCtx.resume().catch(() => {});
+      // A silent buffer is what actually flips Android's autoplay flag.
+      try {
+        const b = _spkCtx.createBuffer(1, 2400, 24000);
+        const s = _spkCtx.createBufferSource();
+        s.buffer = b; s.connect(_spkGain); s.start();
+      } catch (_) {}
+    }
+    document.addEventListener('pointerdown', _speakerUnlock, false);
+
+    function _playJarvisPcm(arrayBuffer) {
+      if (!_spkCtx || _spkCtx.state !== 'running') {
+        if (!_spkHintShown) {
+          _spkHintShown = true;
+          sys('🔊 JARVIS is talking — tap anywhere once to hear the speaker.');
+          toast('Tap to hear JARVIS');
+        }
+        return;
+      }
+      _spkBuf.push(new Int16Array(arrayBuffer));
+      // Jitter buffer: flush when 3 batches (~600 ms) are queued, or after
+      // 250 ms — smooth enough for mobile data, without a noticeable delay.
+      if (_spkBuf.length >= 3) { _flushSpkBuf(); return; }
+      if (!_spkFlushTimer) _spkFlushTimer = setTimeout(_flushSpkBuf, 250);
+    }
+
+    function _flushSpkBuf() {
+      clearTimeout(_spkFlushTimer); _spkFlushTimer = null;
+      if (!_spkBuf.length || !_spkCtx || _spkCtx.state !== 'running') { _spkBuf = []; return; }
+      const now = _spkCtx.currentTime;
+      // Backlog guard: >4 s of unplayed audio means the tab was frozen —
+      // drop the stale queue rather than replaying an ancient reply.
+      if (_spkNextTime > now + 4.0) { _spkBuf = []; return; }
+      let total = 0;
+      for (const b of _spkBuf) total += b.length;
+      const pcm = new Int16Array(total);
+      let off = 0;
+      for (const b of _spkBuf) { pcm.set(b, off); off += b.length; }
+      _spkBuf = [];
+      const f32 = new Float32Array(pcm.length);
+      for (let i = 0; i < pcm.length; i++) f32[i] = pcm[i] / 32768;
+      const buf = _spkCtx.createBuffer(1, f32.length, 24000);
+      buf.copyToChannel(f32, 0);
+      const src = _spkCtx.createBufferSource();
+      src.buffer = buf;
+      src.connect(_spkGain);
+      const t = Math.max(_spkNextTime, now + 0.06);
+      src.start(t);
+      _spkNextTime = t + f32.length / 24000;
+    }
+
+    // ── Live chart: remember the last trading symbol JARVIS discussed ────────
+    let lastChartSymbol = 'BTC-USD', lastChartMethod = 'swing';
+    function trackChartCtx(text) {
+      if (!text) return;
+      let m = text.match(/chart_([^_]+?)_(intraday|swing|positional)\.png/i);
+      if (m) { lastChartSymbol = m[1]; lastChartMethod = m[2]; return; }
+      m = text.match(/[—\-]\s*([A-Z0-9.\-^]{2,20})\s*\([^)]*\)\s*@/);
+      if (m && /\bsetup\b|\bSignal:/i.test(text)) {
+        lastChartSymbol = m[1];
+        const mm = text.match(/\b(intraday|swing|positional)\s+setup/i);
+        if (mm) lastChartMethod = mm[1];
+      }
+    }
+    function openLiveChart() {
+      window.open(`/chart?symbol=${encodeURIComponent(lastChartSymbol)}` +
+                  `&method=${encodeURIComponent(lastChartMethod)}`, '_blank');
+    }
 
     function setStatus(s) {
       if (s === 'active') {
@@ -398,11 +1255,397 @@
 
     // ── Toast ─────────────────────────────────────────────────────────────────
     let _toastTimer;
+    // ── Settings ─────────────────────────────────────────────────────────────
+    function openSettings() {
+      document.getElementById('settings-overlay').classList.add('show');
+      _authFetch('/api/settings/newsapi')
+        .then(r => r.json())
+        .then(d => {
+          const inp = document.getElementById('newsapi-input');
+          if (d.set) {
+            inp.placeholder = d.masked || 'Key saved';
+            inp.value = '';            // never echo the real key back
+          }
+        })
+        .catch(() => {});
+      _authFetch('/api/settings/dashboard-token')
+        .then(r => r.json())
+        .then(d => {
+          const inp = document.getElementById('dashtoken-input');
+          if (d.set) {
+            inp.placeholder = d.masked || 'Token saved';
+            inp.value = '';            // never echo the real token back
+          }
+        })
+        .catch(() => {});
+      refreshPTT();
+      refreshGemini();
+    }
+    function closeSettings() {
+      document.getElementById('settings-overlay').classList.remove('show');
+      for (const id of ['newsapi-status', 'dashtoken-status', 'ptt-status', 'gemini-status']) {
+        const el = document.getElementById(id);
+        el.textContent = '';
+        el.className = 'set-status';
+      }
+    }
+
+    // ── Push-to-talk (Mark-LIV hotkey) ─────────────────────────────────────
+    function _pttRender(d) {
+      const st = document.getElementById('ptt-status');
+      const btn = document.getElementById('ptt-toggle-btn');
+      const chord = document.getElementById('ptt-chord');
+      if (chord && d.chord) chord.textContent = d.chord;
+      const live = !!d.live;
+      btn.textContent = d.enabled ? 'DISABLE' : 'ENABLE';
+      btn.className = 'set-btn ' + (d.enabled ? 'ghost' : 'primary');
+      let msg = d.enabled ? 'On' : 'Off';
+      if (d.enabled) {
+        msg += live ? ' — hotkey is live now' : ' — live after JARVIS restarts (config saved)';
+      }
+      _setStatus(st, msg, 'ok');
+    }
+    function refreshPTT() {
+      const st = document.getElementById('ptt-status');
+      _setStatus(st, 'Loading…', '');
+      _authFetch('/api/settings/push-to-talk')
+        .then(r => r.json())
+        .then(d => d.error ? _setStatus(st, d.error, 'err') : _pttRender(d))
+        .catch(() => _setStatus(st, 'Network error', 'err'));
+    }
+    function togglePTT() {
+      const st = document.getElementById('ptt-status');
+      _setStatus(st, 'Switching…', '');
+      _authFetch('/api/settings/push-to-talk', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: document.getElementById('ptt-toggle-btn').textContent.trim() === 'ENABLE' })
+      })
+        .then(r => r.json())
+        .then(d => {
+          if (d.ok === false) { _setStatus(st, d.error || 'Toggle failed', 'err'); refreshPTT(); return; }
+          _pttRender({ enabled: d.enabled, live: d.scope !== 'config-only' && d.scope != null });
+          if (d.scope === 'window') toast('Push-to-talk: works while the JARVIS window is focused');
+          else if (d.scope === 'off') toast('Push-to-talk off');
+          else if (d.enabled) toast('Push-to-talk on');
+        })
+        .catch(() => _setStatus(st, 'Network error', 'err'));
+    }
+
+    // ── Gemini one-shot client (Mark-LIV core/gemini.py) ──────────────────
+    function _geminiRender(d) {
+      const st = document.getElementById('gemini-status');
+      if (d.ok === false) { _setStatus(st, d.error || 'Status failed', 'err'); return; }
+      const ladder = (d.ladders && (d.ladders.smart || d.ladders.SMART)) || [];
+      const lines = [];
+      lines.push(d.key_configured
+        ? 'Key: ' + (d.key_masked || 'set')
+        : 'Key: ✗ not configured');
+      lines.push('Timeout: ' + Math.round((d.timeout_ms || 0) / 1000) + 's per rung');
+      lines.push('Ladder: ' + ladder.join(' → ') + ' → local');
+      lines.push(d.cooling && d.cooling.length
+        ? '⚠ Cooling down (429): ' + d.cooling.join(', ')
+        : '✓ No rungs cooling down');
+      if (d.local && d.local.configured) {
+        lines.push('Local: ✓ ' + d.local.model_path.split('/').pop()
+          + ' (' + d.local.ram_available_mb + 'MB free'
+          + (d.local.model_loaded ? ', LOADED' : '') + ')');
+      } else {
+        lines.push('Local: ✗ no model file');
+      }
+      _setStatus(st, lines.join('  ·  '), d.key_configured ? 'ok' : 'err');
+    }
+    function refreshGemini() {
+      const st = document.getElementById('gemini-status');
+      _setStatus(st, 'Loading…', '');
+      _authFetch('/api/settings/gemini-client')
+        .then(r => r.json())
+        .then(d => _geminiRender(d))
+        .catch(() => _setStatus(st, 'Network error', 'err'));
+    }
+    function _geminiAction(action, doneMsg) {
+      const st = document.getElementById('gemini-status');
+      _setStatus(st, 'Working…', '');
+      _authFetch('/api/settings/gemini-client', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action })
+      })
+        .then(r => r.json())
+        .then(d => {
+          if (d.ok === false) { _setStatus(st, d.error || 'Failed', 'err'); return; }
+          _geminiRender(d);
+          if (doneMsg) toast(doneMsg);
+        })
+        .catch(() => _setStatus(st, 'Network error', 'err'));
+    }
+    function geminiRefreshKey()    { _geminiAction('refresh-key', 'Gemini key re-read from config'); }
+    function geminiClearCooldowns(){ _geminiAction('clear-cooldowns', 'Cooldowns cleared'); }
+    function _setStatus(el, msg, cls) {
+      el.textContent = msg; el.className = 'set-status ' + cls;
+    }
+    function saveNewsKey() {
+      const inp = document.getElementById('newsapi-input');
+      const st  = document.getElementById('newsapi-status');
+      const key = inp.value.trim();
+      if (!key) { _setStatus(st, 'Paste a key first (or leave empty to keep the saved one)', ''); return; }
+      _setStatus(st, 'Saving…', '');
+      _authFetch('/api/settings/newsapi', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key })
+      })
+        .then(r => r.json())
+        .then(d => {
+          if (d.ok) {
+            inp.value = '';
+            inp.placeholder = key.slice(0, 8) + '…' + key.slice(-4);
+            _setStatus(st, 'Saved ✓', 'ok');
+            toast('NewsAPI key saved');
+          } else { _setStatus(st, d.error || 'Save failed', 'err'); }
+        })
+        .catch(() => _setStatus(st, 'Network error', 'err'));
+    }
+    function testNewsKey() {
+      const inp = document.getElementById('newsapi-input');
+      const st  = document.getElementById('newsapi-status');
+      const key = inp.value.trim();
+      if (!key) { _setStatus(st, 'Paste a key to test', ''); return; }
+      _setStatus(st, 'Testing key…', '');
+      _authFetch('/api/settings/newsapi/test', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key })
+      })
+        .then(r => r.json())
+        .then(d => d.ok ? _setStatus(st, d.message, 'ok')
+                        : _setStatus(st, d.error || 'Key rejected', 'err'))
+        .catch(() => _setStatus(st, 'Network error', 'err'));
+    }
+
+    // ── Dashboard static token ──────────────────────────────────────────────
+    function saveDashToken() {
+      const inp = document.getElementById('dashtoken-input');
+      const st  = document.getElementById('dashtoken-status');
+      const tok = inp.value.trim();
+      if (!tok) {
+        // Empty field + SAVE = clear the token (explicit opt-in to disable).
+        if (!confirm('Clear the API access token? Scripts will stop working.')) return;
+      } else if (tok.length < 8) {
+        _setStatus(st, 'Token too short — at least 8 characters', 'err'); return;
+      }
+      _setStatus(st, 'Saving…', '');
+      _authFetch('/api/settings/dashboard-token', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: tok })
+      })
+        .then(r => r.json())
+        .then(d => {
+          if (d.ok) {
+            inp.value = '';
+            inp.placeholder = tok ? tok.slice(0, 4) + '…' + tok.slice(-2) : 'Set a static token…';
+            _setStatus(st, tok ? 'Saved ✓' : 'Cleared ✓', 'ok');
+            toast(tok ? 'API token saved' : 'API token cleared');
+          } else { _setStatus(st, d.error || 'Save failed', 'err'); }
+        })
+        .catch(() => _setStatus(st, 'Network error', 'err'));
+    }
+    function genDashToken() {
+      const inp = document.getElementById('dashtoken-input');
+      const bytes = new Uint8Array(24);
+      crypto.getRandomValues(bytes);
+      inp.value = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+    }
+    function showCurl() {
+      const st = document.getElementById('dashtoken-status');
+      _setStatus(st, `curl ${location.protocol}//${location.host}/api/wake -H "Authorization: Bearer <token>"`, '');
+    }
+
+    // ── Trading panel ───────────────────────────────────────────────────────
+    function openTrading() {
+      document.getElementById('trading-overlay').classList.add('show');
+      refreshTrading();
+    }
+    function closeTrading() {
+      document.getElementById('trading-overlay').classList.remove('show');
+      const kb = document.getElementById('kill-btn');
+      kb.classList.remove('armed'); kb.textContent = '⛔ KILL SWITCH';
+      const ks = document.getElementById('kill-status');
+      ks.textContent = ''; ks.className = 'set-status';
+    }
+
+    function _fmtTs(iso) {
+      if (!iso) return '';
+      const d = new Date(iso);
+      return isNaN(d) ? iso : d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+    }
+
+    function _renderTvAlerts(alerts) {
+      const box = document.getElementById('tv-alerts');
+      if (!alerts || !alerts.length) {
+        box.innerHTML = '<div class="tv-empty">No alerts received yet.</div>'; return;
+      }
+      box.innerHTML = alerts.slice().reverse().map(a =>
+        '<div class="tv-row">' +
+        '<span class="tv-ts">' + esc(_fmtTs(a.ts)) + '</span>' +
+        '<span class="tv-tag ' + esc(a.status) + '">' + esc(a.status).toUpperCase() + '</span>' +
+        '<span class="tv-detail">' + esc(a.detail || '') + '</span>' +
+        '</div>').join('');
+    }
+
+    function _renderFills(fills) {
+      const box = document.getElementById('trade-fills');
+      if (!fills || !fills.length) {
+        box.innerHTML = '<div class="tv-empty">No trades logged yet.</div>'; return;
+      }
+      box.innerHTML = fills.slice().reverse().map(t => {
+        const tag  = t.kill_switch ? 'kill' : (t.status === 'executed' ? 'trade' : 'queued');
+        const what = t.kill_switch
+          ? ('KILL — mode:' + (t.mode_set_to || '?') +
+             ', flattened:' + (t.flattened || []).length +
+             ', failed:' + (t.failed_flattens || []).length + (t.failed_cancels || []).length)
+          : ((t.side || t.direction || '?') + ' ' + (t.symbol || '?') +
+             (t.quantity ? ' x' + t.quantity : '') +
+             (t.price ? ' @' + t.price : '') +
+             (t.status ? ' [' + t.status + ']' : ''));
+        return '<div class="tv-row">' +
+          '<span class="tv-ts">' + esc(_fmtTs(t.timestamp || t.ts)) + '</span>' +
+          '<span class="tv-tag ' + tag + '">' + tag.toUpperCase() + '</span>' +
+          '<span class="tv-detail">' + esc(what) + '</span>' +
+          '</div>';
+      }).join('');
+    }
+
+    function refreshTrading() {
+      _authFetch('/api/trading/activity')
+        .then(r => r.json())
+        .then(d => {
+          if (d.alerts) _renderTvAlerts(d.alerts);
+          if (d.fills)  _renderFills(d.fills);
+        })
+        .catch(() => {});
+      // Mode badge: cheap proxy via live_status — only when panel opens.
+      _authFetch('/api/command', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'trading status' })
+      }).catch(() => {});
+    }
+
+    function doKill() {
+      const btn = document.getElementById('kill-btn');
+      const st  = document.getElementById('kill-status');
+      if (!btn.classList.contains('armed')) {
+        // First tap: arm. Second tap within 4 s: fire.
+        btn.classList.add('armed');
+        btn.textContent = '⚠ TAP AGAIN TO FLATTEN EVERYTHING';
+        _setStatus(st, 'This cancels all orders and market-sells everything. Tap again to confirm.', '');
+        setTimeout(() => {
+          btn.classList.remove('armed');
+          btn.textContent = '⛔ KILL SWITCH';
+        }, 4000);
+        return;
+      }
+      btn.classList.remove('armed');
+      btn.textContent = '⛔ EXECUTING…';
+      btn.disabled = true;
+      _setStatus(st, 'Flattening positions…', '');
+      _authFetch('/api/trading/kill', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm: 'KILL' })
+      })
+        .then(r => r.json())
+        .then(d => {
+          btn.disabled = false;
+          btn.textContent = '⛔ KILL SWITCH';
+          if (d.ok) {
+            _setStatus(st, d.report || 'Kill switch executed', 'ok');
+            toast('🛡 Kill switch executed');
+            refreshTrading();
+          } else {
+            _setStatus(st, d.error || 'Kill failed', 'err');
+          }
+        })
+        .catch(() => {
+          btn.disabled = false;
+          btn.textContent = '⛔ KILL SWITCH';
+          _setStatus(st, 'Network error — KILL MAY NOT HAVE FIRED. Verify positions manually!', 'err');
+        });
+    }
+
     function toast(msg) {
       const t = document.getElementById('toast');
       t.textContent = msg; t.classList.add('show');
       clearTimeout(_toastTimer);
       _toastTimer = setTimeout(() => t.classList.remove('show'), 2800);
+    }
+
+    // ── Phone pairing — QR + link for talking to JARVIS from a phone ─────────
+    let _pairLink = '';
+
+    async function phonePair() {
+      const st  = document.getElementById('phone-pair-status');
+      const btn = document.getElementById('phone-pair-btn');
+      btn.disabled = true; const old = btn.textContent; btn.textContent = '…';
+      try {
+        const r = await _authFetch('/api/phone/pair', { method: 'POST' });
+        const d = await r.json();
+        if (!d.ok) { st.textContent = d.error || 'Pairing failed.'; return; }
+        _pairLink = d.link;
+        const qrBox = document.getElementById('phone-pair-qr');
+        const row   = document.getElementById('phone-link-row');
+        if (d.qr) {
+          document.getElementById('phone-qr-img').src = d.qr;
+          qrBox.style.display = 'block';
+        } else {
+          qrBox.style.display = 'none';
+          st.textContent = 'QR unavailable (pip install qrcode pillow) — use the link instead. ';
+        }
+        document.getElementById('phone-link-input').value = d.link;
+        row.style.display = 'flex';
+        if (d.qr) st.textContent = `Scan with the phone's camera → opens the dashboard, already logged in. Key expires in 5 min.`;
+        const remain = Math.max(0, Math.round(d.expires_in || 300));
+        let left = remain;
+        clearInterval(window._pairCountdown);
+        window._pairCountdown = setInterval(() => {
+          left -= 1;
+          if (left <= 0) {
+            clearInterval(window._pairCountdown);
+            window._pairCountdown = null;
+            st.textContent += ' Key expired — tap GENERATE QR again.';
+            btn.disabled = false;
+          } else if (left === 30 || left === 60 || left === 120) {
+            st.textContent = st.textContent.replace(/ Key expires in \d+ min\.?/, ` Key expires in ${Math.ceil(left / 60)} min.`);
+          }
+        }, 1000);
+      } catch (e) {
+        st.textContent = 'Error: ' + e.message;
+      } finally {
+        btn.textContent = old;
+        if (!window._pairCountdown) btn.disabled = false;   // stays disabled while a key is live
+      }
+    }
+
+    async function phoneStatus() {
+      const st = document.getElementById('phone-pair-status');
+      try {
+        const r = await _authFetch('/api/phone/status');
+        const d = await r.json();
+        if (!d.ok) { st.textContent = d.error || 'Status failed.'; return; }
+        st.textContent = `Paired devices: ${d.paired_devices} · pending keys: ${d.pending_keys} · dashboard: ${d.manual_url}`;
+      } catch (e) { st.textContent = 'Error: ' + e.message; }
+    }
+
+    async function phoneRevoke() {
+      const st = document.getElementById('phone-pair-status');
+      try {
+        const r = await _authFetch('/api/revoke-devices', { method: 'POST' });
+        const d = await r.json();
+        st.textContent = d.ok ? `Revoked ${d.revoked} paired device(s) — they must pair again.` : (d.error || 'Revoke failed.');
+      } catch (e) { st.textContent = 'Error: ' + e.message; }
+    }
+
+    function phoneCopyLink() {
+      const inp = document.getElementById('phone-link-input');
+      inp.select();
+      (navigator.clipboard?.writeText(_pairLink) || Promise.reject())
+        .then(() => toast('Link copied — paste it into Chrome on the phone'))
+        .catch(() => { document.execCommand('copy'); toast('Link copied'); });
     }
 
     // ── Real-time Voice — PCM16 WebSocket → Gemini Live ──────────────────────
@@ -462,98 +1705,194 @@
       });
     }
 
+    // Voice session state — _voiceWanted is the user's INTENT. Everything
+    // else (drop, screen lock, app switch) tries to restore the session
+    // while intent is on; only a second tap on 🎤 clears it.
+    let _voiceWanted  = false;
+    let _voiceStarting = false;
+    let _rcTimer      = null;
+    let _rcTries      = 0;
+    let _wakeLock     = null;
+    let _kaGain       = null;   // mic loopback @ whisper gain — keeps tab "audible"
+
     async function doMic() {
-      if (_voiceWs) { _stopVoice(); return; }
-
-      if (!navigator.mediaDevices?.getUserMedia) {
-        _showVoiceSetup();
+      if (_voiceWs || _voiceWanted) {           // session live or starting → stop it
+        _voiceWanted = false;
+        clearTimeout(_rcTimer);
+        _teardown();
+        sys('Voice stopped.');
         return;
       }
-      let stream;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
-        });
-      } catch (e) {
-        sys(e.name === 'NotAllowedError'
-          ? 'Microphone denied — tap the address bar lock and allow microphone.'
-          : 'Mic error: ' + e.message);
-        return;
-      }
-
-      // 16 kHz context (fall back to native rate — _f32toPcm16 resamples)
-      let ctx;
-      try { ctx = new AudioContext({ sampleRate: 16000 }); }
-      catch (_) { ctx = new AudioContext(); }
-      if (ctx.state === 'suspended') await ctx.resume();
-
-      const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
-      const ws = new WebSocket(
-        `${wsProto}://${location.host}/ws/phone-audio?token=${encodeURIComponent(_authToken)}`
-      );
-      ws.binaryType = 'arraybuffer';
-
-      ws.onopen = async () => {
-        const rate = ctx.sampleRate;
-        const src  = ctx.createMediaStreamSource(stream);
-
-        // AudioWorklet (modern) — runs in dedicated audio thread
-        const wCode = `class J extends AudioWorkletProcessor{process(i){const c=i[0]?.[0];if(c)this.port.postMessage(c.slice());return true;}}registerProcessor('j',J);`;
-        try {
-          const burl = URL.createObjectURL(new Blob([wCode], { type: 'application/javascript' }));
-          await ctx.audioWorklet.addModule(burl);
-          URL.revokeObjectURL(burl);
-          const nd = new AudioWorkletNode(ctx, 'j');
-          // Buffer to 1024 samples (64 ms at 16 kHz) before sending —
-          // matches PC mic chunk size, prevents queue flooding on the server.
-          let _pbuf = [], _plen = 0;
-          nd.port.onmessage = e => {
-            const chunk = new Int16Array(_f32toPcm16(e.data, rate));
-            _pbuf.push(chunk); _plen += chunk.length;
-            if (_plen >= 1024) {
-              const out = new Int16Array(_plen); let off = 0;
-              for (const c of _pbuf) { out.set(c, off); off += c.length; }
-              if (ws.readyState === 1) ws.send(out.buffer);
-              _pbuf = []; _plen = 0;
-            }
-          };
-          src.connect(nd);
-          _audioNd = nd;
-        } catch (_) {
-          // ScriptProcessor fallback (deprecated, still works everywhere)
-          const sp = ctx.createScriptProcessor(4096, 1, 1);
-          sp.onaudioprocess = e => {
-            if (ws.readyState === 1) ws.send(_f32toPcm16(e.inputBuffer.getChannelData(0), rate));
-          };
-          src.connect(sp); sp.connect(ctx.destination);
-          _audioNd = sp;
-        }
-
-        micBtn.innerHTML = '⏹';
-        micBtn.title     = 'Tap to stop';
-        micBtn.classList.add('recording');
-        sys('Voice live — speak now');
-        toast('🎤 Live');
-      };
-
-      ws.onclose = () => { _stopVoice(); };
-      ws.onerror = () => { sys('Voice connection failed.'); _stopVoice(); };
-
-      _voiceWs  = ws;
-      _audioCtx = ctx;
-      _micStm   = stream;
+      _voiceWanted = true;
+      await _startVoice();
     }
 
-    function _stopVoice() {
+    async function _startVoice() {
+      if (_voiceStarting || _voiceWs) return;
+      _voiceStarting = true;
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          _showVoiceSetup();
+          _voiceWanted = false;
+          return;
+        }
+        let stream;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+          });
+        } catch (e) {
+          sys(e.name === 'NotAllowedError'
+            ? 'Microphone denied — tap the address bar lock and allow microphone.'
+            : 'Mic error: ' + e.message);
+          return;
+        }
+        // Android may revoke the mic when the tab is backgrounded — auto-heal
+        stream.getTracks().forEach(t => { t.onended = () => { if (_voiceWanted) _scheduleReconnect(); }; });
+
+        // 16 kHz context (fall back to native rate — _f32toPcm16 resamples)
+        let ctx;
+        try { ctx = new AudioContext({ sampleRate: 16000 }); }
+        catch (_) { ctx = new AudioContext(); }
+        if (ctx.state === 'suspended') {
+          // resume() can stay pending without a user gesture (e.g. programmatic
+          // reconnects) — race it so a blocked resume can't dead-start the mic
+          await Promise.race([
+            ctx.resume().catch(() => {}),
+            new Promise(r => setTimeout(r, 1500)),
+          ]);
+        }
+
+        const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
+        const ws = new WebSocket(
+          `${wsProto}://${location.host}/ws/phone-audio?token=${encodeURIComponent(sessionStorage.getItem('jarvis_token') || '')}`
+        );
+        ws.binaryType = 'arraybuffer';
+
+        ws.onopen = async () => {
+          _rcTries = 0;
+          const rate = ctx.sampleRate;
+          const src  = ctx.createMediaStreamSource(stream);
+
+          // AudioWorklet (modern) — runs in dedicated audio thread
+          const wCode = `class J extends AudioWorkletProcessor{process(i){const c=i[0]?.[0];if(c)this.port.postMessage(c.slice());return true;}}registerProcessor('j',J);`;
+          try {
+            const burl = URL.createObjectURL(new Blob([wCode], { type: 'application/javascript' }));
+            await ctx.audioWorklet.addModule(burl);
+            URL.revokeObjectURL(burl);
+            const nd = new AudioWorkletNode(ctx, 'j');
+            // Buffer to 1024 samples (64 ms at 16 kHz) before sending —
+            // matches PC mic chunk size, prevents queue flooding on the server.
+            let _pbuf = [], _plen = 0;
+            nd.port.onmessage = e => {
+              const chunk = new Int16Array(_f32toPcm16(e.data, rate));
+              _pbuf.push(chunk); _plen += chunk.length;
+              if (_plen >= 1024) {
+                const out = new Int16Array(_plen); let off = 0;
+                for (const c of _pbuf) { out.set(c, off); off += c.length; }
+                if (ws.readyState === 1) ws.send(out.buffer);
+                _pbuf = []; _plen = 0;
+              }
+            };
+            src.connect(nd);
+            _audioNd = nd;
+          } catch (_) {
+            // ScriptProcessor fallback (deprecated, still works everywhere)
+            const sp = ctx.createScriptProcessor(4096, 1, 1);
+            sp.onaudioprocess = e => {
+              if (ws.readyState === 1) ws.send(_f32toPcm16(e.inputBuffer.getChannelData(0), rate));
+            };
+            src.connect(sp); sp.connect(ctx.destination);
+            _audioNd = sp;
+          }
+
+          // Keep-alive: loop the mic back to the speakers at whisper gain.
+          // The tab counts as "audible", so Android gives it media-app
+          // priority and won't freeze it (or the mic) during brief locks.
+          try {
+            _kaGain = ctx.createGain();
+            _kaGain.gain.value = 0.004;
+            src.connect(_kaGain);
+            _kaGain.connect(ctx.destination);
+          } catch (_) { _kaGain = null; }
+
+          _acquireWakeLock();
+
+          micBtn.innerHTML = '⏹';
+          micBtn.title     = 'Tap to stop';
+          micBtn.classList.add('recording');
+          sys('Voice live — speak now');
+          toast('🎤 Live');
+        };
+
+        ws.onclose = () => {
+          _teardown();
+          if (_voiceWanted) _scheduleReconnect();
+        };
+        ws.onerror = () => { /* onclose always follows */ };
+
+        _voiceWs  = ws;
+        _audioCtx = ctx;
+        _micStm   = stream;
+      } finally {
+        _voiceStarting = false;
+      }
+    }
+
+    function _teardown() {
+      if (_kaGain)   { try { _kaGain.disconnect(); }  catch (_) {}; _kaGain  = null; }
       if (_audioNd)  { try { _audioNd.disconnect(); }  catch (_) {}; _audioNd  = null; }
       if (_audioCtx) { try { _audioCtx.close(); }      catch (_) {}; _audioCtx = null; }
-      if (_micStm)   { _micStm.getTracks().forEach(t => t.stop()); _micStm = null; }
+      if (_micStm)   { try { _micStm.getTracks().forEach(t => t.stop()); _micStm = null; } catch (_) {} }
       if (_voiceWs)  {
         const w = _voiceWs; _voiceWs = null;
         if (w.readyState < 2) w.close();
       }
+      _releaseWakeLock();
       _micIdle();
     }
+
+    function _scheduleReconnect() {
+      if (!_voiceWanted) return;
+      if (document.visibilityState !== 'visible') return;  // auto-resume fires on return
+      if (_rcTries >= 5) {
+        _voiceWanted = false;
+        sys('Voice dropped — 5 reconnect attempts failed. Tap 🎤 to retry.');
+        return;
+      }
+      const delay = Math.min(8000, 1000 * Math.pow(2, _rcTries++));
+      sys(`Voice connection lost — re-establishing in ${Math.round(delay / 1000)}s…`);
+      micBtn.innerHTML = '🔄';
+      micBtn.title     = 'Reconnecting — tap to cancel';
+      clearTimeout(_rcTimer);
+      _rcTimer = setTimeout(() => { if (_voiceWanted && !_voiceWs) _startVoice(); }, delay);
+    }
+
+    // Wake Lock: screen stays on while the mic is live (Chrome on HTTPS).
+    // Android releases it when the tab hides — we re-acquire on return.
+    async function _acquireWakeLock() {
+      try {
+        if ('wakeLock' in navigator && !_wakeLock) {
+          _wakeLock = await navigator.wakeLock.request('screen');
+          _wakeLock.addEventListener('release', () => { _wakeLock = null; });
+        }
+      } catch (_) { /* unsupported / denied — non-fatal */ }
+    }
+    function _releaseWakeLock() {
+      try { _wakeLock?.release(); } catch (_) {}
+      _wakeLock = null;
+    }
+
+    // Return from another app / unlock → put the mic straight back up.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && _voiceWanted) {
+        _rcTries = 0;
+        clearTimeout(_rcTimer);
+        if (!_voiceWs) _startVoice();
+        else if (_audioCtx?.state === 'suspended') _audioCtx.resume().catch(() => {});
+        _acquireWakeLock();
+      }
+    });
   </script>
 </body>
 </html>

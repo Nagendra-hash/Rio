@@ -1,0 +1,1 @@
+{"backend": "torch", "samples": 3592, "accuracy": 0.541, "horizon_days": 10, "trained": "2026-09-18T13:34:37"}

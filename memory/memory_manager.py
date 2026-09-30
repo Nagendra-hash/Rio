@@ -425,7 +425,14 @@ forget_memory = forget
 
 # ── Session memory ─────────────────────────────────────────────────────────────
 
-_SESSION_MAX = 3   # safety cap — in practice 0-1 entries after pop
+# Session summaries are the TIMELINE layer of the memory: a dated 1-2 sentence
+# record of what happened in each conversation. They were capped at 3, which
+# made the assistant structurally amnesiac — session four silently destroyed
+# session one, and the briefing's pop_last_session() consumed one more. The
+# timeline is now kept for roughly a year (the verbatim journal in
+# conversation_journal.py holds everything, and the evolution engine consumes
+# both); the cap below is a size guard, not a feature limit.
+_SESSION_MAX = 400   # safety cap — ~1 year of daily sessions
 
 
 def save_session_summary(summary: str, language: str = "") -> None:
@@ -456,8 +463,13 @@ def save_session_summary(summary: str, language: str = "") -> None:
 
 def pop_last_session() -> dict | None:
     """
-    Return AND remove the most recent session entry.
-    Calling this consumes the entry so it is never repeated in future briefings.
+    Return the most recent session entry WITHOUT deleting it.
+
+    This used to pop (remove) the entry so a briefing would never repeat it —
+    but that permanently destroyed the newest piece of the timeline every
+    single morning. The briefing now de-duplicates differently: it passes the
+    entry it already spoke to _mark_session_spoken(), so summaries survive on
+    disk for the evolution engine while the greeting still stays fresh.
     """
     with _lock:
         if not MEMORY_PATH.exists():
@@ -467,13 +479,27 @@ def pop_last_session() -> dict | None:
             sessions = memory.get("sessions", [])
             if not isinstance(sessions, list) or not sessions:
                 return None
-            entry = sessions.pop()          # remove the last entry
-            memory["sessions"] = sessions
-            MEMORY_PATH.write_text(
-                json.dumps(memory, indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
-            return entry
+            return sessions[-1]
         except Exception as e:
             print(f"[Memory] ⚠️ pop_last_session error: {e}")
             return None
+
+
+def _spoken_state_path() -> Path:
+    return BASE_DIR / "memory" / "_last_spoken_session"
+
+
+def _mark_session_spoken(date: str) -> None:
+    """Remember (tiny sidecar file) that the briefing already mentioned the
+    session dated `date`, so it is not repeated in the next greeting."""
+    try:
+        _spoken_state_path().write_text(date, encoding="utf-8")
+    except Exception:
+        pass
+
+
+def was_session_spoken(date: str) -> bool:
+    try:
+        return _spoken_state_path().read_text(encoding="utf-8").strip() == date
+    except Exception:
+        return False

@@ -1,0 +1,27 @@
+{
+  "weights": {
+    "ema_trend": 2.5444,
+    "triple_rsi": 1.772,
+    "sd_zones": 1.4092,
+    "order_blocks": 0.4586,
+    "vol_trail": 0.6506,
+    "reversal_pivot": 0.5677,
+    "alligator": 2.6678,
+    "ema_stack": 3.0,
+    "mtf_alignment": 3.0,
+    "bnf_dip": 1.0
+  },
+  "enabled": {
+    "ema_trend": true,
+    "triple_rsi": true,
+    "sd_zones": true,
+    "order_blocks": true,
+    "vol_trail": true,
+    "reversal_pivot": true,
+    "alligator": true,
+    "ema_stack": true,
+    "mtf_alignment": true,
+    "bnf_dip": true
+  },
+  "updated": "2026-09-30T21:02:30"
+}

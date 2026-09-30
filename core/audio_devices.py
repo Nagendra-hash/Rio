@@ -25,6 +25,8 @@ WHY THIS IS CACHED
 
 from __future__ import annotations
 
+import contextlib
+import os
 import threading
 import time
 
@@ -36,6 +38,75 @@ DEFAULT_VALUE = ""
 
 _cache: dict[str, list[str]] | None = None
 _cache_lock = threading.Lock()
+
+
+# ── ALSA probe noise ────────────────────────────────────────────────────────
+#
+# On a bare ALSA box (no PulseAudio/PipeWire) opening a device at 16/24 kHz
+# makes libasound print the full PortAudio failure block ('paInvalidSampleRate',
+# 'PaAlsaStreamComponent_InitialConfigure', ...) straight to stderr — once per
+# candidate device per host API, at startup and at every resolve(). The device
+# merely does not support the rate; the probe treats it as unusable and moves
+# on. Duplicating the ALRENODRM/pcm.c noise on screen is not diagnostics, it is
+# the probe describing every door it did not open.
+#
+# Redirecting fd 2 is the only reliable quiet: libasound writes with C-level
+# fprintf, which sys.stderr redirection does not catch.
+@contextlib.contextmanager
+def _quiet_stderr():
+    """Silence C-level stderr (libasound/PortAudio chatter) inside the block."""
+    if os.environ.get("JARVIS_AUDIO_VERBOSE"):
+        yield
+        return
+    sys_err = os.dup(2)
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(devnull, 2)
+        yield
+    finally:
+        os.dup2(sys_err, 2)
+        os.close(devnull)
+        os.close(sys_err)
+
+
+_asound_lib = None            # keeps libasound loaded for the process lifetime
+_alsa_error_handler = None    # keeps the ctypes trampoline alive — see below
+
+
+def _silence_alsa_errors() -> None:
+    """Install a no-op libasound error handler — one-time, Linux only.
+
+    Kills the runtime chatter ('ALSA lib pcm.c:8568:(snd_pcm_recover) underrun
+    occurred') that libasound emits every time a playback buffer runs dry.
+    Underruns are already mitigated by main.py's SPEAKER_LATENCY_S headroom;
+    what remains is a cosmetic C-level print on every recovery. Unlike the fd-2
+    redirect above this is a proper libasound hook, so it can stay on for the
+    whole process without hiding our own logs.
+
+    LIFETIME WARNING: ctypes does not keep the callback object alive — the
+    handler AND the CDLL handle must both live in module globals. Storing
+    either in a local leaves libasound with a dangling function pointer into
+    freed memory; the next underrun then calls it and the process dies with
+    SIGSEGV (observed: crash exactly one underrun after startup).
+    """
+    global _asound_lib, _alsa_error_handler
+    if _alsa_error_handler is not None:
+        return
+    try:
+        import ctypes
+        import platform as _pl
+        if _pl.system() != "Linux":
+            return
+        _asound_lib = ctypes.CDLL("libasound.so.2")
+        _HANDLER = ctypes.CFUNCTYPE(
+            None, ctypes.c_char_p, ctypes.c_int,
+            ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p,
+        )
+        _alsa_error_handler = _HANDLER(lambda *_a: None)
+        _asound_lib.snd_lib_error_set_handler(_alsa_error_handler)
+    except Exception:
+        _asound_lib = None
+        _alsa_error_handler = None   # best-effort cosmetics only
 
 # Which host API each direction settled on, so resolve() opens the same endpoint
 # the picker listed. Filled in by _query().
@@ -137,13 +208,14 @@ def _transport_works(idx: int, kind: str, api_key) -> bool:
         if kind == "output":
             # main.py writes with stream.write() — a real sink is rate-limited
             # by the hardware clock, a fake one swallows the buffer instantly.
-            st = sd.RawOutputStream(samplerate=rate, channels=1, dtype="int16",
-                                    blocksize=1024, device=idx)
-            st.start()
-            t0 = time.monotonic()
-            st.write(bytes(int(rate * secs) * 2))   # silence — inaudible
-            elapsed = time.monotonic() - t0
-            st.stop(); st.close()
+            with _quiet_stderr():
+                st = sd.RawOutputStream(samplerate=rate, channels=1, dtype="int16",
+                                        blocksize=1024, device=idx)
+                st.start()
+                t0 = time.monotonic()
+                st.write(bytes(int(rate * secs) * 2))   # silence — inaudible
+                elapsed = time.monotonic() - t0
+                st.stop(); st.close()
             ok = elapsed > secs * 0.5
             if not ok:
                 print(f"[Audio] output: host API reports success but moves no "
@@ -156,11 +228,13 @@ def _transport_works(idx: int, kind: str, api_key) -> bool:
             def _cb(indata, n, *_a):
                 frames[0] += n
 
-            st = sd.InputStream(samplerate=rate, channels=1, dtype="int16",
-                                blocksize=1024, device=idx, callback=_cb)
-            st.start()
+            with _quiet_stderr():
+                st = sd.InputStream(samplerate=rate, channels=1, dtype="int16",
+                                    blocksize=1024, device=idx, callback=_cb)
+                st.start()
             time.sleep(secs)
-            st.stop(); st.close()
+            with _quiet_stderr():
+                st.stop(); st.close()
             ok = frames[0] > rate * secs * 0.3
             if not ok:
                 print(f"[Audio] input: host API delivered {frames[0]} frames in "
@@ -220,20 +294,24 @@ def _usable(idx: int, kind: str) -> bool:
         import sounddevice as sd
         rate = _RATES.get(kind, 16000)
         if kind == "input":
-            st = sd.InputStream(samplerate=rate, channels=1, dtype="int16",
-                                blocksize=1024, device=idx,
-                                callback=lambda *_a: None)
+            with _quiet_stderr():
+                st = sd.InputStream(samplerate=rate, channels=1, dtype="int16",
+                                    blocksize=1024, device=idx,
+                                    callback=lambda *_a: None)
+                st.start()
         else:
-            st = sd.RawOutputStream(samplerate=rate, channels=1, dtype="int16",
-                                    blocksize=1024, device=idx)
-        st.start()
+            with _quiet_stderr():
+                st = sd.RawOutputStream(samplerate=rate, channels=1, dtype="int16",
+                                        blocksize=1024, device=idx)
+                st.start()
         return True
     except Exception:
         return False
     finally:
         if st is not None:
             try:
-                st.stop(); st.close()
+                with _quiet_stderr():
+                    st.stop(); st.close()
             except Exception:
                 pass
 
@@ -263,6 +341,10 @@ def _query() -> dict[str, list[str]]:
     try:
         import platform
         import sounddevice as sd
+
+        # Underrun chatter is emitted while streams RUN, not just while they
+        # open — install the no-op handler once, before any stream exists.
+        _silence_alsa_errors()
 
         devices = list(sd.query_devices())
         try:

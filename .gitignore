@@ -5,19 +5,40 @@
 # never be.
 
 # ── Secrets. Committing any of these publishes them. ──────────────────────────
-config/api_keys.json          # your Gemini API key, plus per-plugin credentials
-config/certs/                 # the dashboard's TLS private key and certificate
-config/whatsapp_web/          # a LINKED WhatsApp session — committing it hands
-                              # somebody your WhatsApp account, not just a key
-**/token*.json                # Google OAuth tokens (Gmail / Calendar plugins)
-**/client_secret*.json        # Google OAuth client secrets
+# NOTE: git has no inline comments — '#' only starts a comment at line start, so
+# each explanation lives on its own line and every pattern stays bare.
+config/api_keys.json
+# ^ your Gemini API key, plus per-plugin credentials
+config/certs/
+# ^ the dashboard's TLS private key and certificate
+config/whatsapp_web/
+# ^ a LINKED WhatsApp session — committing it hands somebody your WhatsApp
+#   account, not just a key
+**/token*.json
+# ^ Google OAuth tokens (Gmail / Calendar plugins)
+**/client_secret*.json
+# ^ Google OAuth client secrets
+site_credentials*.json
+# ^ browser-agent login store (the real store lives outside the repo in
+#   ~/.local/share/jarvis-browser-profile/)
+!scripts/site_credentials.template.json
+# ^ ...but the schema template is safe (only an _example_ entry) and belongs
+#   in the repo
 *credentials*.json
+# ^ any credential blobs anywhere in the tree
+!scripts/site_credentials.template.json
+# ^ re-un-ignored after the wildcard above: the schema template (only an
+#   _example_ entry, no secrets) is documentation and belongs in the repo
 .env
 .env.*
 
 # ── Personal data the assistant accumulates about you ─────────────────────────
 memory/long_term.json
 memory/*.db
+memory/conversations/
+# ^ the verbatim conversation journal
+memory/_last_spoken_session
+memory/_evolution_state.json
 
 # ── Python build noise ────────────────────────────────────────────────────────
 __pycache__/
@@ -35,6 +56,9 @@ venv/
 env/
 ENV/
 
+# ── Deb-extracted system libs (libxcb-cursor0 workaround; see run.sh) ─────────
+.system-libs/
+
 # ── Editors and operating systems ─────────────────────────────────────────────
 .vscode/
 .idea/
@@ -48,3 +72,11 @@ desktop.ini
 logs/
 downloads/
 screenshots/
+memory/trading/train_cache/
+# ^ regenerable 5y OHLCV disk cache for ML training — refetches when stale
+models/
+# ^ local GGUF models (core/llm_local.py) — ~1.9 GB binaries, refetchable from HF
+
+# ── RAG knowledge base ────────────────────────────────────────────────────────
+# Personal documents + vectors + audit — private to this machine.
+knowledge/

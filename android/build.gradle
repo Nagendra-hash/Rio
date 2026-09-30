@@ -1,0 +1,5 @@
+// Root build file — JARVIS Remote (WebView shell for the JARVIS dashboard PWA).
+// Keep AGP version in sync with scripts/build_apk.sh expectations (Gradle 8.7).
+plugins {
+    id 'com.android.application' version '8.4.2' apply false
+}

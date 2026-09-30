@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Trust the JARVIS local CA (make_certs.sh) in addition to system CAs, so the
+     self-signed dashboard loads without prompting. Unknown signers still raise
+     onReceivedSslError, where the app offers explicit TOFU trust. -->
+<network-security-config>
+    <base-config>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="@raw/jarvis_ca" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

@@ -58,6 +58,45 @@ def _user_agent() -> str:
     )
 
 
+def _user_browser_running(browser: str) -> bool:
+    """True when the user's own browser is already running.
+
+    Chrome (and its kin) allow ONE instance per user-data-dir. While the
+    user's browser is open, launching Playwright against the REAL profile
+    can never succeed — the new process prints 'Opening in existing browser
+    session' and exits. Trying it anyway costs a ~20s failed launch PLUS a
+    JARVIS-profile retry on every single interactive action (2026-09-28:
+    every scroll/click paid that tax). Checking first turns the doomed
+    attempt into an instant skip.
+    """
+    exe_hints = {
+        "chrome": ("chrome", "google-chrome", "chromium"),
+        "edge":   ("msedge", "microsoft-edge"),
+        "brave":  ("brave",),
+        "vivaldi": ("vivaldi",),
+        "opera":  ("opera",),
+        "operagx": ("opera",),
+    }
+    needles = exe_hints.get(browser, (browser,))
+    try:
+        out = subprocess.run(
+            ["ps", "-eo", "comm=,args="], capture_output=True, text=True,
+            timeout=5,
+        ).stdout.lower()
+        # Match on the binary name only — 'chrome' appears in every tab's
+        # --type=renderer arg, and a page TITLE containing 'chrome' is noise.
+        for proc_line in out.splitlines():
+            comm = proc_line.split(None, 1)[0].strip("/:")
+            for n in needles:
+                if comm == n or comm.startswith(n) and (
+                        len(comm) == len(n) or not comm[len(n)].isalnum()):
+                    return True
+        return False
+    except Exception as e:
+        print(f"[Browser] process check failed ({e}) — assuming not running")
+        return False
+
+
 def _real_profile_dir(browser: str) -> str:
     home  = Path.home()
     local = os.environ.get("LOCALAPPDATA", "")
@@ -453,7 +492,9 @@ class _BrowserSession:
 
         self._loop:    asyncio.AbstractEventLoop | None = None
         self._thread:  threading.Thread | None          = None
-        self._ready    = threading.Event()
+        self._ready    = threading.Event()   # loop object exists
+        self._loop_ready = threading.Event() # init finished; loop is running
+        self._init_error: Exception | None = None
 
         self._pw:      Playwright     | None = None
         self._context: BrowserContext | None = None
@@ -473,16 +514,33 @@ class _BrowserSession:
     def _run_loop(self):
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
-        self._loop.run_until_complete(self._async_init())
         self._ready.set()
+        try:
+            self._loop.run_until_complete(self._async_init())
+            self._init_error = None
+        except Exception as e:
+            # Surface init failures instead of dying silently — otherwise callers
+            # see a cryptic 'NoneType' object has no attribute 'chromium'.
+            self._init_error = e
+            print(f"[Browser] ⚠️  Playwright init failed for '{self.browser_name}': {e}")
+            self._loop_ready.set()   # unblock waiters so run() can raise the real error
+            self._loop.run_forever() # keep loop alive so close() still works
+            return
+        self._loop_ready.set()
         self._loop.run_forever()
 
     async def _async_init(self):
         self._pw = await async_playwright().start()
 
     def run(self, coro, timeout: int = 60) -> str:
-        if not self._loop:
-            raise RuntimeError(f"Session for '{self.browser_name}' not started.")
+        # Wait until init has ACTUALLY finished and the loop is running —
+        # scheduling coroutines early makes them execute mid-init with self._pw=None.
+        if not self._loop_ready.wait(timeout=120):
+            raise RuntimeError(
+                f"Browser session '{self.browser_name}' did not initialize within 120s.")
+        if self._init_error is not None:
+            raise RuntimeError(
+                f"Playwright failed to start for '{self.browser_name}': {self._init_error}") from self._init_error
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
         return future.result(timeout=timeout)
 
@@ -513,13 +571,35 @@ class _BrowserSession:
         pages = self._context.pages
         return pages[0] if pages else await self._context.new_page()
 
+    async def _is_alive(self) -> bool:
+        """
+        True when the context can still serve requests. A user-closed window
+        or a browser crash leaves the Playwright-side handle non-None but dead
+        — every call on it then raises 'Target page, context or browser has
+        been closed' forever. A cheap read (cookies) round-trips the CDP
+        connection and detects that state before callers burn actions on it.
+        """
+        if self._context is None:
+            return False
+        try:
+            await asyncio.wait_for(self._context.cookies(), timeout=10)
+            return True
+        except Exception:
+            return False
+
     async def _launch(self):
         """
         Launches the browser with the real user profile.
-        Does nothing if the context is already open.
+        Does nothing if the context is already open AND still alive.
         """
         if self._context is not None:
-            return
+            if await self._is_alive():
+                return
+            # Window closed / browser crashed: drop the stale handle and
+            # relaunch below — the real profile is usually free again now.
+            print(f"[Browser] ⚠️  {self.browser_name} context is dead "
+                  f"(closed or crashed) — relaunching")
+            self._context = self._page = None
 
         if self._spec is None:
             raise RuntimeError(
@@ -529,6 +609,9 @@ class _BrowserSession:
         engine_name = self._spec["engine"]
         exe         = self._spec["exe"]
         channel     = self._spec["channel"]
+        if self._pw is None:
+            raise RuntimeError(
+                f"Playwright is not initialized for '{self.browser_name}' — session start failed.")
         engine_obj  = getattr(self._pw, engine_name)
 
         if engine_name == "firefox":
@@ -578,7 +661,12 @@ class _BrowserSession:
             "slow_mo":     0,
             "viewport":    None,
             "no_viewport": True,
-            "timeout":     25_000,
+            # 45s: the 25s default timed out on cold first launch of the
+            # JARVIS profile on this machine's hardware (2026-09-28 log:
+            # "Timeout 25000ms exceeded" — and the IDENTICAL launch then
+            # succeeded on the next attempt). A slow first unpack of a new
+            # profile must not look like a dead browser.
+            "timeout":     45_000,
             "args": [
                 "--start-maximized",
                 "--disable-blink-features=AutomationControlled",
@@ -599,13 +687,20 @@ class _BrowserSession:
             + (f" @ {exe}" if exe else "")
         )
 
-        try:
-            self._context = await engine_obj.launch_persistent_context(profile, **kwargs)
-            self._page = await self._adopt_page()
-            print(f"[Browser] ✅ Launched [{label}] profile={profile}")
-            return
-        except Exception as e:
-            print(f"[Browser] ⚠️  Real profile failed for {label}: {e}")
+        # While the user's own browser is open, a real-profile launch can
+        # never succeed (one instance per user-data-dir). Skip it instantly
+        # instead of paying a ~20s doomed launch on EVERY interactive action.
+        if _user_browser_running(self.browser_name):
+            print(f"[Browser] {self.browser_name} already running — "
+                  f"using the JARVIS profile directly")
+        else:
+            try:
+                self._context = await engine_obj.launch_persistent_context(profile, **kwargs)
+                self._page = await self._adopt_page()
+                print(f"[Browser] ✅ Launched [{label}] profile={profile}")
+                return
+            except Exception as e:
+                print(f"[Browser] ⚠️  Real profile failed for {label}: {e}")
 
         # The real profile could not be opened (browser already open / locked
         # profile / newer Chrome versions block the real profile under
@@ -615,20 +710,44 @@ class _BrowserSession:
         Path(jarvis_profile).mkdir(parents=True, exist_ok=True)
         print(f"[Browser] Retrying with JARVIS profile: {jarvis_profile}")
 
-        try:
-            self._context = await engine_obj.launch_persistent_context(jarvis_profile, **kwargs)
-            self._page = await self._adopt_page()
-            print(f"[Browser] ✅ Launched [{label}] with JARVIS profile "
-                  f"(sign-ins persist across sessions)")
-        except Exception as e2:
-            raise RuntimeError(f"Could not launch {self.browser_name}: {e2}") from e2
+        last_err: Exception | None = None
+        for attempt in (1, 2):
+            try:
+                self._context = await engine_obj.launch_persistent_context(
+                    jarvis_profile, **kwargs)
+                self._page = await self._adopt_page()
+                print(f"[Browser] ✅ Launched [{label}] with JARVIS profile "
+                      f"(sign-ins persist across sessions)"
+                      + (f" — attempt {attempt}" if attempt > 1 else ""))
+                return
+            except Exception as e2:
+                last_err = e2
+                # Cold first launch of a fresh profile has been observed to
+                # time out once and then succeed immediately (2026-09-28).
+                # One retry converts that flake into a launch; anything
+                # harder than a timeout will just fail twice as slowly, so
+                # only timeouts get the second attempt.
+                if attempt == 1 and "Timeout" in str(e2):
+                    print("[Browser] JARVIS profile launch timed out — "
+                          "retrying once (cold start)")
+                    continue
+                break
+        raise RuntimeError(
+            f"Could not launch {self.browser_name}: {last_err}") from last_err
 
 
     async def _get_page(self) -> Page:
         await self._launch()
-        # If somehow page got closed, open a fresh one
+        # If somehow page got closed, open a fresh one — and if the context
+        # died between the liveness check and now, relaunch once and retry.
         if self._page is None or self._page.is_closed():
-            self._page = await self._context.new_page()
+            try:
+                self._page = await self._context.new_page()
+            except Exception:
+                print(f"[Browser] ⚠️  new_page failed — context died mid-action, relaunching")
+                self._context = self._page = None
+                await self._launch()
+                self._page = await self._context.new_page()
             await asyncio.sleep(0.2)
         return self._page
 
@@ -1048,6 +1167,16 @@ def browser_control(
         result = f"Browser action '{action}' timed out (60s)."
     except Exception as e:
         result = f"Browser error ({action}): {e}"
+
+    # get_text failure → EMPTY string, whichever path produced the error.
+    # Code callers (flight_finder etc.) treat any non-empty string as page
+    # text: an error sentence returned as "content" gets fed to an LLM as if
+    # it were the page — burning quota and producing "no flights found".
+    # Voice users still see the failure in the log above.
+    if action == "get_text" and isinstance(result, str) and result.startswith(
+            ("Browser error", "Browser action", "Could not get page text")):
+        print(f"[Browser] get_text failed: {result[:100]}")
+        result = ""
 
     _log(player, result)
     return result

@@ -1,7 +1,13 @@
 #web_search.py
 import json
 import sys
+import threading
+import time
 from pathlib import Path
+
+from core.gemini_retry import with_gemini_retry, in_daily_quota_cooldown
+import requests
+from memory.config_manager import get_newsapi_key
 
 def _get_base_dir() -> Path:
     if getattr(sys, "frozen", False):
@@ -18,15 +24,74 @@ def _get_api_key() -> str:
         return json.load(f)["gemini_api_key"]
 
 
-def _gemini_search(query: str) -> str:
-    from google import genai
+# ── Quota breaker (Mark-LIV) ─────────────────────────────────────────────────
+# core.gemini already cools a 429ing rung for 5 minutes, but grounded search
+# additionally loses the whole day's free-tier search quota at once. Once that
+# happens the fastest useful answer is DDG — so when a quota rejection gets
+# through, skip Gemini grounding entirely for a while and say it once.
+_QUOTA_COOLDOWN_SEC  = 900          # 15 minutes
+_quota_blocked_until = 0.0
+_quota_lock          = threading.Lock()
 
-    client   = genai.Client(api_key=_get_api_key())
-    response = client.models.generate_content(
-        model="gemini-flash-latest",
-        contents=query,
-        config={"tools": [{"google_search": {}}]},
-    )
+
+class _QuotaCooldown(RuntimeError):
+    """Raised instead of calling Gemini while the quota breaker is open.
+
+    The message deliberately contains none of the marker words that
+    core.gemini_retry.is_transient_error classifies as transient ("quota",
+    "timeout", "429", …) — a retry inside the backoff window would fail
+    identically, so this must fail through to DDG on attempt 1.
+    """
+
+
+def _gemini_available() -> bool:
+    with _quota_lock:
+        return time.monotonic() >= _quota_blocked_until
+
+
+def _note_gemini_error(exc: Exception) -> None:
+    """Trip the breaker when the error is a quota / rate-limit rejection."""
+    global _quota_blocked_until
+    msg = str(exc)
+    if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
+        with _quota_lock:
+            already = time.monotonic() < _quota_blocked_until
+            _quota_blocked_until = time.monotonic() + _QUOTA_COOLDOWN_SEC
+        if not already:
+            print(
+                "[WebSearch] Gemini grounding quota exhausted — skipping it for "
+                f"{_QUOTA_COOLDOWN_SEC // 60} min and serving results from DDG."
+            )
+
+
+@with_gemini_retry(label="WebSearch")
+def _gemini_search(query: str) -> str:
+    # Daily cap gone (seen within the last 10 min): every retry inside the
+    # decorator would fail identically — skip straight to the caller's DDG
+    # fallback instead of stalling each search ~14 s. The message deliberately
+    # avoids words like "quota"/"timeout": those are backoff triggers in
+    # core/gemini_retry.is_transient_error, and this skip must fail through on
+    # attempt 1, not be retried.
+    if in_daily_quota_cooldown():
+        raise RuntimeError("Gemini skipped: daily cap in effect (cooldown)")
+    if not _gemini_available():
+        raise _QuotaCooldown("Gemini grounding skipped: rate-limit breaker open")
+
+    # Mark-LIV ladder: grounded search stays REST-only (a Live turn cannot
+    # carry grounding metadata), but walks pinned models → -latest aliases
+    # with a real deadline and 429 cooldowns, instead of one hardcoded alias
+    # with no timeout.
+    from core import gemini
+
+    try:
+        response = gemini.call(query, tier=gemini.SEARCH,
+                               config={"tools": [{"google_search": {}}]},
+                               timeout_ms=30_000)
+        if response is None:
+            raise RuntimeError("every Gemini model on the ladder failed")
+    except Exception as e:
+        _note_gemini_error(e)
+        raise
 
     text = ""
     for part in response.candidates[0].content.parts:
@@ -39,7 +104,39 @@ def _gemini_search(query: str) -> str:
     return text
 
 
+# Short-TTL cache for DDG queries. A repeated query inside the window must not
+# re-hit the search engines: DuckDuckGo ratelimits by repetition (the log shows
+# news.js 403s on the same "top world news today" query asked back-to-back),
+# and JARVIS re-asks the same question whenever a turn is retried or the user
+# repeats themselves. TTL is short on purpose — news must stay news.
+_DDG_CACHE_MAX = 32
+_DDG_CACHE: dict[str, tuple[float, object]] = {}
+_DDG_CACHE_TTL_S = 90.0
+
+
+def _ddg_cached(key: str, fn):
+    """Return cached DDG results for `key`, or run fn() and cache the result.
+    Exceptions propagate — the callers' fallback chains handle them."""
+    now = time.monotonic()
+    hit = _DDG_CACHE.get(key)
+    if hit and now - hit[0] < _DDG_CACHE_TTL_S:
+        return hit[1]
+    result = fn()
+    if len(_DDG_CACHE) >= _DDG_CACHE_MAX:      # keep insertions O(1); 32 entries of snippet text is small
+        _DDG_CACHE.pop(next(iter(_DDG_CACHE)))
+    _DDG_CACHE[key] = (now, result)
+    return result
+
+
 def _ddg_search(query: str, max_results: int = 6) -> list[dict]:
+    results = _ddg_cached(
+        f"text:{max_results}:{query}",
+        lambda: _ddg_text_raw(query, max_results),
+    )
+    return results
+
+
+def _ddg_text_raw(query: str, max_results: int) -> list[dict]:
     try:
         from ddgs import DDGS
     except ImportError:
@@ -57,25 +154,40 @@ def _ddg_search(query: str, max_results: int = 6) -> list[dict]:
 
 
 def _ddg_news(query: str, max_results: int = 8) -> list[dict]:
-    """DDG news search — returns actual articles, not website homepages."""
+    """News search — returns actual articles, not website homepages.
+
+    ddgs ≥9 fans each news query out to bing, duckduckgo and yahoo and only
+    fails if every engine fails, so an upstream 403 on one engine no longer
+    sinks the call (the old duckduckgo_search package hit DDG's news.js alone
+    — that is the 403 in the old logs). Repeated queries within the TTL are
+    served from cache, which is what actually keeps the periodic ratelimit
+    403s away. If every news engine is ratelimited, a text search (different
+    engine pool) still answers — its results just lack a 'source' field."""
+    def _news_with_fallback():
+        try:
+            return _ddg_news_raw(query, max_results)
+        except Exception as e:
+            print(f"[WebSearch] ⚠️ DDG news() failed ({e}) — falling back to text search")
+            return _ddg_search(query, max_results=max_results)
+
+    return _ddg_cached(f"news:{max_results}:{query}", _news_with_fallback)
+
+
+def _ddg_news_raw(query: str, max_results: int) -> list[dict]:
     try:
         from ddgs import DDGS
     except ImportError:
         from duckduckgo_search import DDGS
 
     results = []
-    try:
-        with DDGS() as ddgs:
-            for r in ddgs.news(query, max_results=max_results):
-                results.append({
-                    "title":   r.get("title",  ""),
-                    "snippet": r.get("body",   ""),
-                    "url":     r.get("url",    ""),
-                    "source":  r.get("source", ""),
-                })
-    except Exception as e:
-        print(f"[WebSearch] ⚠️ DDG news() failed ({e}) — falling back to text search")
-        results = _ddg_search(query, max_results=max_results)
+    with DDGS() as ddgs:
+        for r in ddgs.news(query, max_results=max_results):
+            results.append({
+                "title":   r.get("title",  ""),
+                "snippet": r.get("body",   ""),
+                "url":     r.get("url",    ""),
+                "source":  r.get("source", ""),
+            })
     return results
 
 
@@ -111,8 +223,52 @@ def _format_news(query: str, results: list[dict]) -> str:
     return "\n".join(lines).strip()
 
 
+def _newsapi_top(query: str, max_results: int = 8) -> str:
+    """NewsAPI.org backend — live headlines via the user's own key
+    (set it in the dashboard ⚙ Settings). With a query it searches everything;
+    without one it returns top headlines — the morning-briefing case.
+
+    Raises on any failure; the caller falls through to Gemini/DDG.
+    Deliberately NO retry decorator: this is the first-choice backend, and a
+    fast fail-through (bad key, daily quota gone) beats a slow retry."""
+    key = get_newsapi_key()
+    if not key:
+        raise RuntimeError("NewsAPI key not configured")
+
+    if query.strip():
+        url, params = "https://newsapi.org/v2/everything", {
+            "q": query.strip(), "language": "en",
+            "sortBy": "publishedAt", "pageSize": max_results,
+        }
+    else:
+        url, params = "https://newsapi.org/v2/top-headlines", {
+            "country": "us", "pageSize": max_results,
+        }
+    resp = requests.get(url, params={**params, "apiKey": key}, timeout=8)
+    try:
+        body = resp.json()
+    except ValueError:
+        body = {}
+    if resp.status_code != 200 or body.get("status") != "ok":
+        msg = (body.get("message") or resp.text or "").strip()[:120]
+        raise RuntimeError(f"NewsAPI {resp.status_code}: {msg}")
+
+    articles = [
+        {
+            "title":   a.get("title") or "",
+            "snippet": (a.get("description") or "")[:140],
+            "url":     a.get("url") or "",
+            "source":  (a.get("source") or {}).get("name", ""),
+        }
+        for a in body.get("articles", [])
+    ]
+    articles = [a for a in articles if a["title"]]
+    return _format_news(query.strip() or "top stories", articles)
+
+
 # ── Briefing helper ────────────────────────────────────────────────────────────
 
+@with_gemini_retry(label="WebSearch")
 def _gemini_headlines(n: int = 5) -> tuple[list[str], str]:
     """
     Fetches current headlines via Gemini grounded search.
@@ -120,14 +276,18 @@ def _gemini_headlines(n: int = 5) -> tuple[list[str], str]:
     Returns (headline_list, raw_text_for_display).
     """
     import re
-    from google import genai
 
-    client = genai.Client(api_key=_get_api_key())
-    response = client.models.generate_content(
-        model="gemini-flash-latest",
-        contents=f"Current world news: {n} headlines. Numbered list, titles only.",
+    # Mark-LIV ladder: same grounding config, now with fallbacks + a deadline.
+    from core import gemini
+
+    response = gemini.call(
+        f"Current world news: {n} headlines. Numbered list, titles only.",
+        tier=gemini.SEARCH,
         config={"tools": [{"google_search": {}}]},
+        timeout_ms=30_000,
     )
+    if response is None:
+        return [], ""
 
     raw = ""
     for part in response.candidates[0].content.parts:
@@ -164,10 +324,33 @@ def _search(query: str) -> str:
 
 def _news(query: str) -> str:
     """
-    Runs Gemini grounded search AND DDG news in parallel.
-    Returns whichever delivers a valid result first; cancels the other.
+    News with a three-backend chain: NewsAPI (user key, dashboard ⚙) →
+    Gemini grounded search → DDG news. NewsAPI gets a short grace window to
+    answer first (highest-quality backend); the Gemini/DDG race is unchanged
+    behind it.
     """
     import threading
+
+    # ── Backend 0: NewsAPI — short grace, fast fail-through ─────────────
+    napi_box = [None]           # late result may still land (see the end)
+    napi_thread = None
+    if get_newsapi_key():
+        napi_evt = threading.Event()
+
+        def _try_newsapi():
+            try:
+                napi_box[0] = _newsapi_top(query)
+            except Exception as e:
+                print(f"[WebSearch] ⚠️ NewsAPI failed ({e})")
+            finally:
+                napi_evt.set()
+
+        napi_thread = threading.Thread(target=_try_newsapi, daemon=True)
+        napi_thread.start()
+        if napi_evt.wait(timeout=5.0) and napi_box[0]:
+            return napi_box[0]
+        # Miss (slow or failed) → fall through; the Gemini/DDG race below
+        # takes over. A late NewsAPI result is still picked up at the end.
 
     gemini_query = f"latest news today: {query}" if query else "top world news today"
     ddg_query    = query if query else "world news today"
@@ -204,11 +387,36 @@ def _news(query: str) -> str:
             print(f"[WebSearch] ⚠️ DDG news failed ({e})")
             _store("")
 
-    threading.Thread(target=_try_gemini, daemon=True).start()
-    threading.Thread(target=_try_ddg,    daemon=True).start()
+    gemini_thread = threading.Thread(target=_try_gemini, daemon=True)
+    ddg_thread    = threading.Thread(target=_try_ddg,    daemon=True)
+    gemini_thread.start()
+    ddg_thread.start()
 
+    # Fast path: whoever delivers first (usually DDG) ends the wait.
     done_evt.wait(timeout=10.0)
-    return result_box[0] or f"No news found for: {query}"
+    if result_box[0] is not None:
+        return result_box[0]
+
+    # Slow path: DDG came up empty and Gemini is mid-retry (exponential
+    # backoff inside _gemini_search) — give it until its last attempt lands
+    # instead of abandoning a recovery that is seconds away.
+    deadline = time.monotonic() + 45.0   # ≈ 3 attempts incl. backoff + call time
+    while result_box[0] is None:
+        if done_evt.is_set():                                  # both failed
+            break
+        if not (gemini_thread.is_alive() or ddg_thread.is_alive()):
+            break
+        if time.monotonic() >= deadline:
+            break
+        done_evt.wait(timeout=0.5)
+    # Nothing arrived from the race and a NewsAPI call that missed its 5s
+    # grace may still be in flight — it is the highest-quality backend, so
+    # give it one bounded moment to land instead of answering "no news"
+    # while a better answer is seconds away. (Bounded: NewsAPI has its own
+    # 8s HTTP timeout and no retries.)
+    if result_box[0] is None and napi_thread is not None and napi_thread.is_alive():
+        napi_thread.join(timeout=6.0)
+    return napi_box[0] or result_box[0] or f"No news found for: {query}"
 
 
 def _research(query: str) -> str:

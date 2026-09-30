@@ -1,0 +1,11 @@
+{
+  "routines": {
+    "news_primary": {
+      "active": true
+    }
+  },
+  "cursors": {
+    "news_primary": "2026-09-30"
+  },
+  "budget": 12
+}

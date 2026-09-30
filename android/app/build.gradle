@@ -1,0 +1,53 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Dashboard URL is injected by scripts/build_apk.sh (-PdashboardUrl) so the APK
+// always points at the PC's current LAN IP. Fallback covers manual gradle runs.
+def dashboardUrl = (project.findProperty('dashboardUrl') ?: 'https://192.168.29.172:8000/').toString()
+
+android {
+    namespace 'com.jarvis.remote'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.jarvis.remote'
+        minSdk 26
+        targetSdk 34
+        versionCode 5
+        versionName '1.4'
+        resValue 'string', 'dashboard_url', dashboardUrl
+    }
+
+    signingConfigs {
+        release {
+            def ksProps = new Properties()
+            def ksFile = rootProject.file('keystore.properties')
+            if (ksFile.exists()) {
+                ksFile.withInputStream { ksProps.load(it) }
+                // paths in keystore.properties are relative to the project root
+                storeFile rootProject.file(ksProps['storeFile'])
+                storePassword ksProps['storePassword']
+                keyAlias ksProps['keyAlias']
+                keyPassword ksProps['keyPassword']
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+// Zero external dependencies: the app is a thin WebView shell over the existing
+// dashboard PWA (https + mic websocket + file upload), so keep the build tiny.
+dependencies {
+}

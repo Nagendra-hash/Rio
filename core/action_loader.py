@@ -36,7 +36,7 @@ from typing import Callable, Optional
 
 _NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]{0,63}$")
 _DEFAULT_PARAMS = {"type": "OBJECT", "properties": {}}
-_CTX_KEYS = ("player", "speak", "response", "session_memory")
+_CTX_KEYS = ("player", "speak", "response", "session_memory", "dashboard")
 
 
 @dataclass
@@ -77,6 +77,19 @@ class ActionRegistry:
         try:
             return _call_handler(rec.handler, parameters, ctx or {}) or "Done."
         except Exception as e:
+            # Self-heal: a crash caused by a missing dependency (module not
+            # installed, import failing at call time) is fixed by installing
+            # it, reloading the action module and retrying ONCE.
+            diag, healed = _heal(str(e))
+            if healed:
+                new_handler = _rebind_handler(rec)
+                if new_handler is not None:
+                    self._logger(f"Self-heal: {diag} — retrying '{name}'")
+                    try:
+                        return _call_handler(new_handler, parameters, ctx or {}) or "Done."
+                    except Exception as e2:
+                        self._logger(f"Action '{name}' failed again after self-heal: {e2}")
+                        return f"Tool '{name}' failed: {e2}"
             self._logger(f"Action '{name}' crashed during run(): {e}")
             traceback.print_exc()
             return f"Tool '{name}' failed: {e}"
@@ -93,6 +106,37 @@ def _call_handler(fn: Callable, parameters: dict, ctx: dict) -> str:
         if has_var_kw or key in sig.parameters:
             kwargs[key] = ctx.get(key)
     return fn(parameters=parameters, **kwargs)
+
+
+def _heal(error_text: str) -> tuple[str, bool]:
+    """Self-heal hook: install whatever missing dependency the error names
+    (core/self_heal.py). Lazy import so action_loader keeps working even if
+    self_heal itself is broken. Never raises."""
+    try:
+        from core.self_heal import heal_from_error
+        return heal_from_error(error_text)
+    except Exception as e:
+        return f"self-heal unavailable: {e}", False
+
+
+def _rebind_handler(rec: "ActionRecord"):
+    """Reload the module an action came from and return its fresh handler —
+    used after a self-heal install so the retried call imports cleanly."""
+    try:
+        actions_dir = Path(__file__).resolve().parent.parent / "actions"
+        path = actions_dir / Path(rec.file).name
+        module_name = f"actions.{path.stem}"
+        sys.modules.pop(module_name, None)
+        spec = importlib.util.spec_from_file_location(module_name, path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+        tool = getattr(module, "TOOL", None)
+        if isinstance(tool, dict) and callable(tool.get("handler")):
+            return tool["handler"]
+    except Exception:
+        traceback.print_exc()
+    return None
 
 
 def _validate(module, filename: str) -> ActionRecord:
@@ -157,9 +201,20 @@ def discover_actions(actions_dir: Path, reserved_names: set[str] | None = None,
                 sys.modules[module_name] = module
                 try:
                     spec.loader.exec_module(module)
-                except Exception:
+                except Exception as first_err:
                     sys.modules.pop(module_name, None)
-                    raise
+                    # Self-heal: a ModuleNotFoundError for a third-party lib is
+                    # fixed by installing it, then the import is retried once.
+                    diag, healed = _heal(str(first_err))
+                    if not healed:
+                        raise
+                    logger(f"Self-heal: {diag} — retrying import of {path.name}")
+                    spec = importlib.util.spec_from_file_location(module_name, path)
+                    if spec is None or spec.loader is None:
+                        raise
+                    module = importlib.util.module_from_spec(spec)
+                    sys.modules[module_name] = module
+                    spec.loader.exec_module(module)
 
             if getattr(module, "TOOL", None) is None:
                 continue   # not an action file — a helper/capture-only module

@@ -1,0 +1,1662 @@
+{
+  "lessons": [
+    {
+      "lesson": "Consider wider stops based on ATR. Current ATR was 40.00. A stop of 1.5-2x ATR would give the trade more room.",
+      "category": "tight_stop",
+      "when": "2026-09-17T17:15:48+00:00"
+    },
+    {
+      "lesson": "Review the entry setup \u2014 was the signal strength sufficient? Higher score thresholds reduce low-conviction trades.",
+      "category": "no_target_hit",
+      "when": "2026-09-17T17:15:48+00:00"
+    },
+    {
+      "lesson": "Consider only taking signals that align with the EMA trend, or reduce position size when counter-trend.",
+      "category": "counter_trend",
+      "when": "2026-09-17T17:15:48+00:00"
+    },
+    {
+      "lesson": "Consider only taking signals that align with the EMA trend, or reduce position size when counter-trend.",
+      "category": "counter_trend",
+      "when": "2026-09-17T17:17:10+00:00"
+    },
+    {
+      "lesson": "Consider only taking signals that align with the EMA trend, or reduce position size when counter-trend.",
+      "category": "counter_trend",
+      "when": "2026-09-17T17:19:19+00:00"
+    },
+    {
+      "lesson": "Consider wider stops based on ATR. Current ATR was 13.10. A stop of 1.5-2x ATR would give the trade more room.",
+      "category": "tight_stop",
+      "when": "2026-09-17T17:19:20+00:00"
+    },
+    {
+      "lesson": "Review the entry setup \u2014 was the signal strength sufficient? Higher score thresholds reduce low-conviction trades.",
+      "category": "no_target_hit",
+      "when": "2026-09-17T17:19:20+00:00"
+    },
+    {
+      "lesson": "Review risk management. Consider capping position size so no single trade can lose more than 1-2% of capital. Review stop placement.",
+      "category": "large_loss",
+      "when": "2026-09-17T17:19:20+00:00"
+    },
+    {
+      "lesson": "Consider only taking signals that align with the EMA trend, or reduce position size when counter-trend.",
+      "category": "counter_trend",
+      "when": "2026-09-17T17:19:44+00:00"
+    }
+  ],
+  "updated": "2026-09-17T17:19:44+00:00",
+  "backfilled_mistakes": [
+    {
+      "symbol": "AAPL",
+      "method": "?",
+      "outcome": "-0.52%",
+      "mistake": "Lost -0.52% \u2014 strategy needs adjustment for this pattern",
+      "votes": {
+        "ema_trend": 1,
+        "rsi_revert": 0,
+        "macd_momo": 1,
+        "bb_squeeze": 0
+      },
+      "time": "2026-09-14"
+    },
+    {
+      "symbol": "RELIANCE.NS",
+      "method": "intraday",
+      "outcome": "-0.08%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 14:30"
+    },
+    {
+      "symbol": "RELIANCE.NS",
+      "method": "intraday",
+      "outcome": "-0.09%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 0,
+        "ema_stack": 0,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 12:45"
+    },
+    {
+      "symbol": "RELIANCE.NS",
+      "method": "intraday",
+      "outcome": "-0.08%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 0,
+        "ema_stack": 0,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 12:15"
+    },
+    {
+      "symbol": "RELIANCE.NS",
+      "method": "intraday",
+      "outcome": "-0.00%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 0,
+        "ema_stack": 0,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 12:00"
+    },
+    {
+      "symbol": "RELIANCE.NS",
+      "method": "intraday",
+      "outcome": "-0.05%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 0,
+        "ema_stack": 0,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 11:45"
+    },
+    {
+      "symbol": "RELIANCE.NS",
+      "method": "intraday",
+      "outcome": "-0.00%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 0,
+        "ema_stack": 0,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 11:15"
+    },
+    {
+      "symbol": "RELIANCE.NS",
+      "method": "intraday",
+      "outcome": "-0.15%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 0,
+        "ema_stack": 0,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 10:15"
+    },
+    {
+      "symbol": "RELIANCE.NS",
+      "method": "intraday",
+      "outcome": "-0.22%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 0,
+        "ema_stack": 0,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 10:00"
+    },
+    {
+      "symbol": "RELIANCE.NS",
+      "method": "intraday",
+      "outcome": "-0.42%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 0,
+        "ema_stack": 0,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 09:30"
+    },
+    {
+      "symbol": "RELIANCE.NS",
+      "method": "intraday",
+      "outcome": "-1.35%",
+      "mistake": "Large loss of -1.35% \u2014 review entry and stop placement",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": -1,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-15 15:15"
+    },
+    {
+      "symbol": "RELIANCE.NS",
+      "method": "swing",
+      "outcome": "-0.38%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": -1,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-15 00:00"
+    },
+    {
+      "symbol": "RELIANCE.NS",
+      "method": "swing",
+      "outcome": "-0.00%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": -1,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-11 00:00"
+    },
+    {
+      "symbol": "RELIANCE.NS",
+      "method": "positional",
+      "outcome": "-0.38%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": -1,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-15 00:00"
+    },
+    {
+      "symbol": "RELIANCE.NS",
+      "method": "positional",
+      "outcome": "-0.00%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-11 00:00"
+    },
+    {
+      "symbol": "BTC-USD",
+      "method": "intraday",
+      "outcome": "-0.24%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": 0
+      },
+      "time": "2026-09-16 08:30"
+    },
+    {
+      "symbol": "BTC-USD",
+      "method": "intraday",
+      "outcome": "-0.18%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": -1,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": 0
+      },
+      "time": "2026-09-16 08:15"
+    },
+    {
+      "symbol": "BTC-USD",
+      "method": "swing",
+      "outcome": "-3.26%",
+      "mistake": "Large loss of -3.26% \u2014 review entry and stop placement",
+      "votes": {
+        "ema_trend": 1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 1,
+        "ema_stack": 1,
+        "mtf_alignment": 0
+      },
+      "time": "2026-09-14 00:00"
+    },
+    {
+      "symbol": "BTC-USD",
+      "method": "positional",
+      "outcome": "-3.26%",
+      "mistake": "Large loss of -3.26% \u2014 review entry and stop placement",
+      "votes": {
+        "ema_trend": 1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 1,
+        "ema_stack": 0,
+        "mtf_alignment": 0
+      },
+      "time": "2026-09-14 00:00"
+    },
+    {
+      "symbol": "AAPL",
+      "method": "swing",
+      "outcome": "-0.52%",
+      "mistake": "Lost -0.52% \u2014 strategy needs adjustment for this pattern",
+      "votes": {
+        "ema_trend": 1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 1,
+        "ema_stack": 1,
+        "mtf_alignment": 1
+      },
+      "time": "2026-09-14 00:00"
+    },
+    {
+      "symbol": "AAPL",
+      "method": "swing",
+      "outcome": "-0.28%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": 1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 0,
+        "ema_stack": 0,
+        "mtf_alignment": 1
+      },
+      "time": "2026-09-08 00:00"
+    },
+    {
+      "symbol": "AAPL",
+      "method": "positional",
+      "outcome": "-0.52%",
+      "mistake": "Lost -0.52% \u2014 strategy needs adjustment for this pattern",
+      "votes": {
+        "ema_trend": 1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 1,
+        "ema_stack": 1,
+        "mtf_alignment": 1
+      },
+      "time": "2026-09-14 00:00"
+    },
+    {
+      "symbol": "AAPL",
+      "method": "positional",
+      "outcome": "-0.28%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": 1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 0,
+        "ema_stack": 1,
+        "mtf_alignment": 1
+      },
+      "time": "2026-09-08 00:00"
+    },
+    {
+      "symbol": "TCS.NS",
+      "method": "intraday",
+      "outcome": "-0.27%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 15:00"
+    },
+    {
+      "symbol": "TCS.NS",
+      "method": "intraday",
+      "outcome": "-0.04%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": -1,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 14:30"
+    },
+    {
+      "symbol": "TCS.NS",
+      "method": "intraday",
+      "outcome": "-0.06%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 12:45"
+    },
+    {
+      "symbol": "TCS.NS",
+      "method": "intraday",
+      "outcome": "-0.09%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 12:15"
+    },
+    {
+      "symbol": "TCS.NS",
+      "method": "intraday",
+      "outcome": "-0.03%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 12:00"
+    },
+    {
+      "symbol": "TCS.NS",
+      "method": "intraday",
+      "outcome": "-0.12%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 11:30"
+    },
+    {
+      "symbol": "TCS.NS",
+      "method": "intraday",
+      "outcome": "-0.05%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": 0,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 10:30"
+    },
+    {
+      "symbol": "TCS.NS",
+      "method": "intraday",
+      "outcome": "-0.72%",
+      "mistake": "Lost -0.72% \u2014 strategy needs adjustment for this pattern",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": 0,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 09:30"
+    },
+    {
+      "symbol": "TCS.NS",
+      "method": "swing",
+      "outcome": "-2.28%",
+      "mistake": "Large loss of -2.28% \u2014 review entry and stop placement",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-14 00:00"
+    },
+    {
+      "symbol": "TCS.NS",
+      "method": "swing",
+      "outcome": "-0.00%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": 0
+      },
+      "time": "2026-09-11 00:00"
+    },
+    {
+      "symbol": "TCS.NS",
+      "method": "positional",
+      "outcome": "-2.28%",
+      "mistake": "Large loss of -2.28% \u2014 review entry and stop placement",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-14 00:00"
+    },
+    {
+      "symbol": "TCS.NS",
+      "method": "positional",
+      "outcome": "-0.00%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": 0
+      },
+      "time": "2026-09-11 00:00"
+    },
+    {
+      "symbol": "SOL-USD",
+      "method": "intraday",
+      "outcome": "-0.40%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": -1,
+        "reversal_pivot": 0,
+        "alligator": 0,
+        "ema_stack": -1,
+        "mtf_alignment": 0
+      },
+      "time": "2026-09-16 14:00"
+    },
+    {
+      "symbol": "SOL-USD",
+      "method": "intraday",
+      "outcome": "-0.17%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": 0,
+        "triple_rsi": -1,
+        "sd_zones": 0,
+        "order_blocks": 1,
+        "vol_trail": 0,
+        "reversal_pivot": 1,
+        "alligator": 1,
+        "ema_stack": 0,
+        "mtf_alignment": 0
+      },
+      "time": "2026-09-16 11:30"
+    },
+    {
+      "symbol": "SOL-USD",
+      "method": "intraday",
+      "outcome": "-0.29%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": 0
+      },
+      "time": "2026-09-16 08:30"
+    },
+    {
+      "symbol": "SOL-USD",
+      "method": "positional",
+      "outcome": "-5.47%",
+      "mistake": "Large loss of -5.47% \u2014 review entry and stop placement",
+      "votes": {
+        "ema_trend": 1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 1,
+        "ema_stack": 0,
+        "mtf_alignment": 0
+      },
+      "time": "2026-09-14 00:00"
+    },
+    {
+      "symbol": "BTC-USD",
+      "method": "intraday",
+      "outcome": "-0.33%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": 0
+      },
+      "time": "2026-09-16 14:00"
+    },
+    {
+      "symbol": "BTC-USD",
+      "method": "intraday",
+      "outcome": "-0.02%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": -1,
+        "reversal_pivot": 0,
+        "alligator": 0,
+        "ema_stack": -1,
+        "mtf_alignment": 0
+      },
+      "time": "2026-09-16 13:15"
+    },
+    {
+      "symbol": "BTC-USD",
+      "method": "intraday",
+      "outcome": "-0.24%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": 0,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 1,
+        "ema_stack": 1,
+        "mtf_alignment": 0
+      },
+      "time": "2026-09-16 12:00"
+    },
+    {
+      "symbol": "BTC-USD",
+      "method": "swing",
+      "outcome": "-3.25%",
+      "mistake": "Large loss of -3.25% \u2014 review entry and stop placement",
+      "votes": {
+        "ema_trend": 1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 1,
+        "ema_stack": 1,
+        "mtf_alignment": 0
+      },
+      "time": "2026-09-14 05:30"
+    },
+    {
+      "symbol": "BTC-USD",
+      "method": "positional",
+      "outcome": "-3.25%",
+      "mistake": "Large loss of -3.25% \u2014 review entry and stop placement",
+      "votes": {
+        "ema_trend": 1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 1,
+        "ema_stack": 0,
+        "mtf_alignment": 0
+      },
+      "time": "2026-09-14 05:30"
+    },
+    {
+      "symbol": "SOL-USD",
+      "method": "intraday",
+      "outcome": "-0.24%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": 0
+      },
+      "time": "2026-09-16 15:15"
+    },
+    {
+      "symbol": "AAPL",
+      "method": "?",
+      "outcome": "-0.52%",
+      "mistake": "Lost -0.52% \u2014 strategy needs adjustment for this pattern",
+      "votes": {
+        "ema_trend": 1,
+        "rsi_revert": 0,
+        "macd_momo": 1,
+        "bb_squeeze": 0
+      },
+      "time": "2026-09-14"
+    },
+    {
+      "symbol": "RELIANCE.NS",
+      "method": "intraday",
+      "outcome": "-0.08%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 14:30"
+    },
+    {
+      "symbol": "RELIANCE.NS",
+      "method": "intraday",
+      "outcome": "-0.09%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 0,
+        "ema_stack": 0,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 12:45"
+    },
+    {
+      "symbol": "RELIANCE.NS",
+      "method": "intraday",
+      "outcome": "-0.08%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 0,
+        "ema_stack": 0,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 12:15"
+    },
+    {
+      "symbol": "RELIANCE.NS",
+      "method": "intraday",
+      "outcome": "-0.00%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 0,
+        "ema_stack": 0,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 12:00"
+    },
+    {
+      "symbol": "RELIANCE.NS",
+      "method": "intraday",
+      "outcome": "-0.05%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 0,
+        "ema_stack": 0,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 11:45"
+    },
+    {
+      "symbol": "RELIANCE.NS",
+      "method": "intraday",
+      "outcome": "-0.00%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 0,
+        "ema_stack": 0,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 11:15"
+    },
+    {
+      "symbol": "RELIANCE.NS",
+      "method": "intraday",
+      "outcome": "-0.15%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 0,
+        "ema_stack": 0,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 10:15"
+    },
+    {
+      "symbol": "RELIANCE.NS",
+      "method": "intraday",
+      "outcome": "-0.22%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 0,
+        "ema_stack": 0,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 10:00"
+    },
+    {
+      "symbol": "RELIANCE.NS",
+      "method": "intraday",
+      "outcome": "-0.42%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 0,
+        "ema_stack": 0,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 09:30"
+    },
+    {
+      "symbol": "RELIANCE.NS",
+      "method": "intraday",
+      "outcome": "-1.35%",
+      "mistake": "Large loss of -1.35% \u2014 review entry and stop placement",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": -1,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-15 15:15"
+    },
+    {
+      "symbol": "RELIANCE.NS",
+      "method": "swing",
+      "outcome": "-0.38%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": -1,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-15 00:00"
+    },
+    {
+      "symbol": "RELIANCE.NS",
+      "method": "swing",
+      "outcome": "-0.00%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": -1,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-11 00:00"
+    },
+    {
+      "symbol": "RELIANCE.NS",
+      "method": "positional",
+      "outcome": "-0.38%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": -1,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-15 00:00"
+    },
+    {
+      "symbol": "RELIANCE.NS",
+      "method": "positional",
+      "outcome": "-0.00%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-11 00:00"
+    },
+    {
+      "symbol": "BTC-USD",
+      "method": "intraday",
+      "outcome": "-0.24%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": 0
+      },
+      "time": "2026-09-16 08:30"
+    },
+    {
+      "symbol": "BTC-USD",
+      "method": "intraday",
+      "outcome": "-0.18%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": -1,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": 0
+      },
+      "time": "2026-09-16 08:15"
+    },
+    {
+      "symbol": "BTC-USD",
+      "method": "swing",
+      "outcome": "-3.26%",
+      "mistake": "Large loss of -3.26% \u2014 review entry and stop placement",
+      "votes": {
+        "ema_trend": 1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 1,
+        "ema_stack": 1,
+        "mtf_alignment": 0
+      },
+      "time": "2026-09-14 00:00"
+    },
+    {
+      "symbol": "BTC-USD",
+      "method": "positional",
+      "outcome": "-3.26%",
+      "mistake": "Large loss of -3.26% \u2014 review entry and stop placement",
+      "votes": {
+        "ema_trend": 1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 1,
+        "ema_stack": 0,
+        "mtf_alignment": 0
+      },
+      "time": "2026-09-14 00:00"
+    },
+    {
+      "symbol": "AAPL",
+      "method": "swing",
+      "outcome": "-0.52%",
+      "mistake": "Lost -0.52% \u2014 strategy needs adjustment for this pattern",
+      "votes": {
+        "ema_trend": 1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 1,
+        "ema_stack": 1,
+        "mtf_alignment": 1
+      },
+      "time": "2026-09-14 00:00"
+    },
+    {
+      "symbol": "AAPL",
+      "method": "swing",
+      "outcome": "-0.28%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": 1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 0,
+        "ema_stack": 0,
+        "mtf_alignment": 1
+      },
+      "time": "2026-09-08 00:00"
+    },
+    {
+      "symbol": "AAPL",
+      "method": "positional",
+      "outcome": "-0.52%",
+      "mistake": "Lost -0.52% \u2014 strategy needs adjustment for this pattern",
+      "votes": {
+        "ema_trend": 1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 1,
+        "ema_stack": 1,
+        "mtf_alignment": 1
+      },
+      "time": "2026-09-14 00:00"
+    },
+    {
+      "symbol": "AAPL",
+      "method": "positional",
+      "outcome": "-0.28%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": 1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 0,
+        "ema_stack": 1,
+        "mtf_alignment": 1
+      },
+      "time": "2026-09-08 00:00"
+    },
+    {
+      "symbol": "TCS.NS",
+      "method": "intraday",
+      "outcome": "-0.27%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 15:00"
+    },
+    {
+      "symbol": "TCS.NS",
+      "method": "intraday",
+      "outcome": "-0.04%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": -1,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 14:30"
+    },
+    {
+      "symbol": "TCS.NS",
+      "method": "intraday",
+      "outcome": "-0.06%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 12:45"
+    },
+    {
+      "symbol": "TCS.NS",
+      "method": "intraday",
+      "outcome": "-0.09%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 12:15"
+    },
+    {
+      "symbol": "TCS.NS",
+      "method": "intraday",
+      "outcome": "-0.03%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 12:00"
+    },
+    {
+      "symbol": "TCS.NS",
+      "method": "intraday",
+      "outcome": "-0.12%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 11:30"
+    },
+    {
+      "symbol": "TCS.NS",
+      "method": "intraday",
+      "outcome": "-0.05%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": 0,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 10:30"
+    },
+    {
+      "symbol": "TCS.NS",
+      "method": "intraday",
+      "outcome": "-0.72%",
+      "mistake": "Lost -0.72% \u2014 strategy needs adjustment for this pattern",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": 0,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-16 09:30"
+    },
+    {
+      "symbol": "TCS.NS",
+      "method": "swing",
+      "outcome": "-2.28%",
+      "mistake": "Large loss of -2.28% \u2014 review entry and stop placement",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-14 00:00"
+    },
+    {
+      "symbol": "TCS.NS",
+      "method": "swing",
+      "outcome": "-0.00%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": 0
+      },
+      "time": "2026-09-11 00:00"
+    },
+    {
+      "symbol": "TCS.NS",
+      "method": "positional",
+      "outcome": "-2.28%",
+      "mistake": "Large loss of -2.28% \u2014 review entry and stop placement",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": -1
+      },
+      "time": "2026-09-14 00:00"
+    },
+    {
+      "symbol": "TCS.NS",
+      "method": "positional",
+      "outcome": "-0.00%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": 0
+      },
+      "time": "2026-09-11 00:00"
+    },
+    {
+      "symbol": "SOL-USD",
+      "method": "intraday",
+      "outcome": "-0.40%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": -1,
+        "reversal_pivot": 0,
+        "alligator": 0,
+        "ema_stack": -1,
+        "mtf_alignment": 0
+      },
+      "time": "2026-09-16 14:00"
+    },
+    {
+      "symbol": "SOL-USD",
+      "method": "intraday",
+      "outcome": "-0.17%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": 0,
+        "triple_rsi": -1,
+        "sd_zones": 0,
+        "order_blocks": 1,
+        "vol_trail": 0,
+        "reversal_pivot": 1,
+        "alligator": 1,
+        "ema_stack": 0,
+        "mtf_alignment": 0
+      },
+      "time": "2026-09-16 11:30"
+    },
+    {
+      "symbol": "SOL-USD",
+      "method": "intraday",
+      "outcome": "-0.29%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": 0
+      },
+      "time": "2026-09-16 08:30"
+    },
+    {
+      "symbol": "SOL-USD",
+      "method": "positional",
+      "outcome": "-5.47%",
+      "mistake": "Large loss of -5.47% \u2014 review entry and stop placement",
+      "votes": {
+        "ema_trend": 1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 1,
+        "ema_stack": 0,
+        "mtf_alignment": 0
+      },
+      "time": "2026-09-14 00:00"
+    },
+    {
+      "symbol": "BTC-USD",
+      "method": "intraday",
+      "outcome": "-0.33%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": 0
+      },
+      "time": "2026-09-16 14:00"
+    },
+    {
+      "symbol": "BTC-USD",
+      "method": "intraday",
+      "outcome": "-0.02%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": -1,
+        "reversal_pivot": 0,
+        "alligator": 0,
+        "ema_stack": -1,
+        "mtf_alignment": 0
+      },
+      "time": "2026-09-16 13:15"
+    },
+    {
+      "symbol": "BTC-USD",
+      "method": "intraday",
+      "outcome": "-0.24%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": 0,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 1,
+        "ema_stack": 1,
+        "mtf_alignment": 0
+      },
+      "time": "2026-09-16 12:00"
+    },
+    {
+      "symbol": "BTC-USD",
+      "method": "swing",
+      "outcome": "-3.25%",
+      "mistake": "Large loss of -3.25% \u2014 review entry and stop placement",
+      "votes": {
+        "ema_trend": 1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 1,
+        "ema_stack": 1,
+        "mtf_alignment": 0
+      },
+      "time": "2026-09-14 05:30"
+    },
+    {
+      "symbol": "BTC-USD",
+      "method": "positional",
+      "outcome": "-3.25%",
+      "mistake": "Large loss of -3.25% \u2014 review entry and stop placement",
+      "votes": {
+        "ema_trend": 1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": 1,
+        "ema_stack": 0,
+        "mtf_alignment": 0
+      },
+      "time": "2026-09-14 05:30"
+    },
+    {
+      "symbol": "SOL-USD",
+      "method": "intraday",
+      "outcome": "-0.24%",
+      "mistake": "Small move \u2014 lack of conviction or bad timing",
+      "votes": {
+        "ema_trend": -1,
+        "triple_rsi": 0,
+        "sd_zones": 0,
+        "order_blocks": 0,
+        "vol_trail": 0,
+        "reversal_pivot": 0,
+        "alligator": -1,
+        "ema_stack": -1,
+        "mtf_alignment": 0
+      },
+      "time": "2026-09-16 15:15"
+    }
+  ]
+}
