@@ -38,8 +38,11 @@ from pathlib import Path
 
 import numpy as np
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-DEFAULT_MODEL_PATH = BASE_DIR.parent / "models" / \
+import os as _os_home
+_BASE_HOME = _os_home.environ.get("JARVIS_HOME", "").strip()
+BASE_DIR = (Path(_BASE_HOME).expanduser().resolve() if _BASE_HOME
+            else Path(__file__).resolve().parent.parent)
+DEFAULT_MODEL_PATH = BASE_DIR / "models" / \
     "qwen2.5-coder-3b-instruct-q4_k_m.gguf"
 
 # ── knobs (env-overridable, sane defaults for this machine) ──────────────────

@@ -98,6 +98,12 @@ from datetime import datetime
 from pathlib import Path
 
 _BASE = Path(__file__).resolve().parent.parent
+# JARVIS_HOME (pendrive mode): config is read here and llm_usage.jsonl is
+# WRITTEN here — both are writable state, so both follow the relocatable home
+# (same contract as memory_manager.get_base_dir).
+_home = os.environ.get("JARVIS_HOME", "").strip()
+if _home:
+    _BASE = Path(_home).expanduser().resolve()
 _CONFIG_PATH = _BASE / "config" / "api_keys.json"
 _USAGE_PATH = _BASE / "memory" / "llm_usage.jsonl"
 

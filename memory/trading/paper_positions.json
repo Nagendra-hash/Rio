@@ -171,18 +171,18 @@
     "symbol": "BTC-USD",
     "method": "intraday",
     "direction": "LONG",
-    "entry_price": 81676.992188,
-    "stop_loss": 81575.00084,
+    "entry_price": 84299.578125,
+    "stop_loss": 84137.343574,
     "targets": [
-      81778.983535,
-      81880.974882,
-      81982.966229
+      84461.812676,
+      84624.047227,
+      84786.281777
     ],
     "position_size": 1,
     "capital_at_entry": 10000.0,
-    "atr": 101.991347,
-    "open_time": "2026-09-21T06:37:13+00:00",
-    "last_update": "2026-09-21T06:37:13+00:00",
+    "atr": 162.234551,
+    "open_time": "2026-10-01T06:21:47+00:00",
+    "last_update": "2026-10-01T06:21:47+00:00",
     "status": "open",
     "hits": [
       false,
@@ -198,9 +198,10 @@
       "order_blocks": 0,
       "vol_trail": 0,
       "reversal_pivot": 0,
-      "alligator": 0,
-      "ema_stack": 0,
-      "mtf_alignment": 1
+      "alligator": 1,
+      "ema_stack": 1,
+      "mtf_alignment": 1,
+      "bnf_dip": 0
     },
     "closed_reason": null,
     "closed_time": null,

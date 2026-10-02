@@ -1,5 +1,5 @@
 {
-  "last_run_date": "2026-09-30",
-  "last_run_at": "2026-09-30T21:02:22",
-  "result": "Evaluated 109 new signal(s). Journal now 1054 signals \u2014 win rate 50.9%. Weight adaptation: intraday:sd_zones 1.38\u21921.41 (61% of 18); swing:ema_trend 2.47\u21922.51 (58% of 66); swing:order_blocks 0.49\u21920.47 (33% of 9); swing:alligator 2.60\u21922.63 (56% of 62); positional:ema_trend 2.51\u21922.54 (57% of 68); posit"
+  "last_run_date": "2026-10-01",
+  "last_run_at": "2026-10-01T23:01:41",
+  "result": "Evaluated 106 new signal(s). Journal now 1177 signals \u2014 win rate 51.1%. Weight adaptation: intraday:triple_rsi 1.77\u21921.78 (54% of 41); intraday:sd_zones 1.47\u21921.50 (58% of 19); swing:ema_trend 2.70\u21922.74 (57% of 70); swing:order_blocks 0.40\u21920.39 (33% of 9); swing:alligator 2.81\u21922.84 (56% of 64); positi"
 }

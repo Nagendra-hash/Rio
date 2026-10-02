@@ -8,3 +8,6 @@ ExecStart=/home/nagendra/Mark-LIII/systemd/jarvis-live-model-watch.sh
 # path) leaves this unit failed until the next clean run — the alarm surface,
 # same convention as jarvis-rotation-smoke.service.
 Environment=DISPLAY=:0
+# Durable incident timeline: every probe outcome is appended to the JSONL log
+# (one JSON object per line) so incident history survives /tmp cleanups.
+Environment=JARVIS_LMW_INCIDENTS=/home/nagendra/Mark-LIII/memory/incidents.jsonl

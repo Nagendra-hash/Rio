@@ -7,6 +7,15 @@ import sys
 
 
 def get_base_dir() -> Path:
+    # JARVIS_HOME (2026-10-01): everything writable — config/, memory/, the
+    # conversation journal — resolves through here, so pointing the variable at
+    # a folder on the pendrive makes the whole assistant portable. Import-time
+    # callers (conversation_journal) resolve it before any UI exists, so the
+    # variable must be set by the launcher, not a settings screen.
+    import os
+    home = os.environ.get("JARVIS_HOME", "").strip()
+    if home:
+        return Path(home).expanduser().resolve()
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
     return Path(__file__).resolve().parent.parent

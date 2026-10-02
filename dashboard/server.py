@@ -36,6 +36,12 @@ except Exception:
     pass
 
 BASE_DIR    = Path(__file__).resolve().parent.parent
+# JARVIS_HOME (pendrive mode): relocates everything writable. Set here, at the
+# top of the module, before any function below computes a path.
+import os as _os_home
+_home = _os_home.environ.get("JARVIS_HOME", "").strip()
+if _home:
+    BASE_DIR = Path(_home).expanduser().resolve()
 STATIC_DIR  = Path(__file__).parent / "static"
 PORT        = 8000
 MAX_UPLOAD_MB = 500

@@ -228,6 +228,28 @@ def search_journal(query: str, limit: int = 12) -> str:
     return ("From the conversation history:\n" + "\n".join(lines) + more)
 
 
+def recent_journal_tail(max_chars: int = 1200) -> str:
+    """The last few journal turns, oldest first, for prompt injection when a
+    fresh session replaces a dead one (main.py _build_config). Budgeted in
+    characters — the prompt must stay small no matter how chatty yesterday
+    was. Returns '' when the journal has nothing usable; a record missing
+    `ts` (corrupt line already survived _iter_journal's JSON guard) is
+    skipped rather than formatted with a bare '?'."""
+    recs = [r for r in _iter_journal()
+            if r.get("ts") and str(r.get("text", "")).strip()]
+    if not recs:
+        return ""
+    tail = recs[-8:]
+    lines = [f"{'User' if r.get('speaker') == 'user' else 'JARVIS'}: "
+             f"{str(r.get('text'))[:200]}" for r in tail]
+    out = "\n".join(lines)
+    # Trim from the FRONT so the newest turn — the one most likely to matter —
+    # always survives the budget.
+    while len(out) > max_chars and "\n" in out:
+        out = out.split("\n", 1)[1]
+    return out
+
+
 # ── 2. The evolution engine ───────────────────────────────────────────────────
 
 def _consolidation_context(months_back: int = 2) -> tuple[str, int, str]:

@@ -3,6 +3,12 @@ import sys
 from pathlib import Path
 
 def get_base_dir() -> Path:
+    # Same contract as memory_manager.get_base_dir: JARVIS_HOME relocates every
+    # writable path (api_keys.json included) — required for pendrive mode.
+    import os
+    home = os.environ.get("JARVIS_HOME", "").strip()
+    if home:
+        return Path(home).expanduser().resolve()
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
     return Path(__file__).resolve().parent.parent

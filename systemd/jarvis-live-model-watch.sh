@@ -36,12 +36,21 @@
 #   JARVIS_LMW_NOTIFY        1 = notify on flip/rollback (default 1)
 #   JARVIS_LMW_ENV_FILE      Telegram creds file (default ~/.hermes/.env)
 #   JARVIS_LMW_TG_API        Telegram API base (stub-able in tests)
+#   JARVIS_LMW_INCIDENTS     incident JSONL timeline (default memory/incidents.jsonl)
+#   JARVIS_LMW_INCIDENT_ID   incident id stamped on records (default live-20260930-3.1)
 # ─────────────────────────────────────────────────────────────────────────────
 
 CONFIG="${JARVIS_LMW_CONFIG:-$HOME/Mark-LIII/config/api_keys.json}"
 CANDIDATE="${JARVIS_LMW_CANDIDATE:-models/gemini-3.1-flash-live-preview}"
 STATE_FILE="${JARVIS_LMW_STATE_FILE:-/tmp/jarvis_live_model_watch.state}"
 LOG="${JARVIS_LMW_LOG:-/tmp/jarvis_live_model_watch.log}"
+# Durable incident timeline: every probe outcome is appended here as one JSON
+# object per line (memory/incidents.jsonl), so the 2026-09-30 Live-voice
+# incident's full history survives /tmp cleanups and can be replayed later.
+# Dash-only default (not :-): an explicitly EMPTY value must disable incident
+# logging (opt-out), not fall back to the default path.
+INCIDENTS="${JARVIS_LMW_INCIDENTS-$HOME/Mark-LIII/memory/incidents.jsonl}"
+INCIDENT_ID="${JARVIS_LMW_INCIDENT_ID:-live-20260930-3.1}"
 PROBE="${JARVIS_LMW_PROBE:-$HOME/Mark-LIII/.venv/bin/python $HOME/Mark-LIII/scripts/diag_live_speech_health.py}"
 SYSCTL="${JARVIS_LMW_SYSTEMCTL:-systemctl}"
 RECOVERY_HITS="${JARVIS_LMW_RECOVERY_HITS:-2}"
@@ -51,6 +60,47 @@ TG_API="${JARVIS_LMW_TG_API:-https://api.telegram.org}"
 
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 note() { echo "[$(ts)] $*" >> "$LOG"; }
+
+# Append a machine-readable record to the incident log. Best-effort by design:
+# a broken log path must never affect probing or the flip logic, so everything
+# runs inside a guarded python heredoc whose failures land in the watch log.
+# $1 = event name; $2 = optional CONTROLLED JSON literal (bash never
+# interpolates probe output into it). The probe's own --json verdict arrives
+# via $LMW_OUT and is parsed in python (last {…} line wins) instead.
+record_incident() {
+  [ -n "$INCIDENTS" ] || return 0
+  LMW_EVENT="$1" LMW_FIELDS="${2:-}" LMW_OUT="${out:-}" \
+    LMW_ID="$INCIDENT_ID" LMW_MODEL="$CANDIDATE" \
+    python3 - "$INCIDENTS" >>"$LOG" 2>&1 <<'PY' || true
+import datetime, json, os, sys
+try:
+    rec = {
+        "event": os.environ["LMW_EVENT"],
+        "id": os.environ["LMW_ID"],
+        "model": os.environ["LMW_MODEL"],
+        "at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+    }
+    raw = os.environ.get("LMW_OUT", "").strip()
+    for line in reversed(raw.splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                rec["probe"] = json.loads(line)
+                break
+            except ValueError:
+                pass
+    if "probe" not in rec and raw:
+        rec["probe_output"] = raw[:300]
+    if os.environ.get("LMW_FIELDS"):
+        rec.update(json.loads(os.environ["LMW_FIELDS"]))
+    path = sys.argv[1]
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "a") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+except Exception as e:  # logging must never break the probe cycle
+    print(f"incident-log append failed: {type(e).__name__}: {e}")
+PY
+}
 
 # ── notifications (same channels as jarvis-rotation-smoke.sh) ────────────────
 notify() {
@@ -116,6 +166,7 @@ note "probe $CANDIDATE: $verdict ${out:+| $out}"
 
 if [ "$verdict" != "healthy" ]; then
   rm -f "$STATE_FILE"          # streak resets on any failure
+  record_incident probe_broken
   exit 0
 fi
 
@@ -127,6 +178,7 @@ hits=$((hits + 1))
 if [ "$hits" -lt "$RECOVERY_HITS" ]; then
   printf '%s' "$hits" > "$STATE_FILE"
   note "✅ candidate healthy $hits/$RECOVERY_HITS — waiting for more confirmations"
+  record_incident probe_healthy "{\"streak\": $hits, \"required\": $RECOVERY_HITS}"
   exit 0
 fi
 
@@ -154,10 +206,12 @@ if [ "$state" != "active" ]; then
   "$SYSCTL" --user restart jarvis-gui.service
   notify "🔴 JARVIS model flip FAILED" \
     "Switched live_model to $CANDIDATE but the service did not come back. Rolled back to $current — check journalctl --user -u jarvis-gui"
+  record_incident flip_rolled_back "{\"rolled_back_to\": \"$current\"}"
   exit 1
 fi
 rm -f "$STATE_FILE" "$CONFIG.bak-lmw"
 note "✅ flipped live_model → $CANDIDATE; jarvis-gui active"
+record_incident recovered "{\"streak\": $hits, \"required\": $RECOVERY_HITS, \"flipped_to\": \"$CANDIDATE\"}"
 notify "🟢 JARVIS Live model restored" \
   "gemini-3.1-flash-live-preview passed $RECOVERY_HITS consecutive speech probes. live_model switched back and jarvis-gui restarted cleanly."
 exit 0

@@ -33,6 +33,10 @@ else:
 
 
 def _get_base_dir() -> Path:
+    import os
+    home = os.environ.get("JARVIS_HOME", "").strip()
+    if home:
+        return Path(home).expanduser().resolve()
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
     return Path(__file__).resolve().parent.parent

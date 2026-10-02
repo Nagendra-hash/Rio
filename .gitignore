@@ -80,3 +80,11 @@ models/
 # ── RAG knowledge base ────────────────────────────────────────────────────────
 # Personal documents + vectors + audit — private to this machine.
 knowledge/
+
+# ── Portable mode build artifacts ────────────────────────────────────────────
+# scripts/build_portable.py output (~2-4 GB runtime + deps) and the writable
+# jarvis-home/ a launcher run creates (config, memories, journal). The build
+# output is meant to be copied onto the stick, the home is personal data.
+jarvis-portable-build/
+jarvis-portable/
+jarvis-home/

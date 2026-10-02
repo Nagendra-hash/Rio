@@ -44,6 +44,21 @@ _warnings.filterwarnings("ignore", message=".*Setting the shape on a NumPy array
 import asyncio
 import concurrent.futures
 
+# ── Portable model cache (pendrive mode) ──────────────────────────────────────
+# Whisper (STT), Kokoro (TTS) and the wake-word models download into the
+# HuggingFace cache, which defaults to ~/.cache/huggingface on the HOST — that
+# both leaks ~400 MB onto a stranger's PC and breaks the promise that models
+# travel on the stick (PORTABLE.md). Pointing HF_HOME at jarvis-home before any
+# of those modules load redirects every HF download into the drive. The user's
+# own JARVIS_HOME / HF_HOME always win; without JARVIS_HOME nothing changes.
+import os as _os
+if _os.environ.get("JARVIS_HOME", "").strip() and not _os.environ.get("HF_HOME", "").strip():
+    from pathlib import Path as _Path
+    _hf_home = _Path(_os.environ["JARVIS_HOME"].strip()).expanduser().resolve() / "hf-cache"
+    _hf_home.mkdir(parents=True, exist_ok=True)
+    _os.environ["HF_HOME"] = str(_hf_home)
+    _os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+
 # ── Python 3.10 compatibility: asyncio.TaskGroup & exception groups ──────────
 # asyncio.TaskGroup and the (Base)ExceptionGroup builtins are Python 3.11+
 # features; the deployment machine runs the 3.10 system Python. The shims below
@@ -301,9 +316,9 @@ from actions.background_monitor import (
 )
 from actions.camera_watch       import CameraWatcher
 from actions.web_search        import _news as _fetch_news_sync
-from memory.config_manager     import (
+from memory.config_manager import (
     get_brief_enabled, get_voice, get_wake_word_enabled, save_wake_word_enabled,    get_input_device, get_output_device,
-    get_push_to_talk_enabled,
+    get_push_to_talk_enabled, get_thinking_enabled,
 )
 from core.plugin_loader        import discover_plugins
 from core                      import undo as undo_stack
@@ -321,6 +336,12 @@ from core.wake_word            import (
 WAKE_SLEEP_TIMEOUT = 120.0   # seconds (2 minutes)
 
 def get_base_dir():
+    # JARVIS_HOME relocates the whole app for pendrive mode — see
+    # memory/memory_manager.get_base_dir for the full contract.
+    import os
+    home = os.environ.get("JARVIS_HOME", "").strip()
+    if home:
+        return Path(home).expanduser().resolve()
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
     return Path(__file__).resolve().parent
@@ -460,14 +481,19 @@ def _pcm_visemes(samples, sr: int = 24000):
         return []
 
 
-_gemini_key_cycle = itertools.count()   # advances on every client build
+_gemini_key_index = 0   # pinned per process; advanced only on quota/invalid-key
+# (2026-10-01: this used to be itertools.count() round-robin — every client
+# build picked the NEXT key. A Live resumption handle is bound to the project
+# that issued it, so each reconnect presented the handle to a different
+# project and the server rejected it with `1008 None. Session does not belong
+# to this project` → "starting a fresh session" → every rotation wiped the
+# conversation. Rotating only on failure keeps the handle and its project
+# together; a 429'd key is still skipped via _rotate_api_key below.)
 
 
-def _get_api_key() -> str:
-    """Round-robin across the primary Gemini key plus any extras in
-    'gemini_api_keys'. The Live voice session rebuilds its client on every
-    reconnect, so a key that 429s is naturally skipped on the next attempt.
-    (Text-generation calls additionally fail over via core.llm_router.)"""
+def _load_gemini_keys() -> list[str]:
+    """Primary Gemini key plus any extras in 'gemini_api_keys', deduplicated,
+    order-stable."""
     with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
         cfg = json.load(f)
     keys = [cfg.get("gemini_api_key") or ""]
@@ -475,10 +501,40 @@ def _get_api_key() -> str:
     if isinstance(extra, str):
         extra = [extra]
     keys += [k for k in extra if isinstance(k, str) and k.strip()]
-    keys = [k.strip() for k in keys if k.strip()]
+    seen: set[str] = set()
+    out: list[str] = []
+    for k in (k.strip() for k in keys):
+        if k and k not in seen:
+            seen.add(k)
+            out.append(k)
+    return out
+
+
+def _get_api_key() -> str:
+    """The CURRENT Gemini key — pinned for the life of the process.
+
+    A resumption handle only resumes on the project that issued it, so the
+    Live session must rebuild with the SAME key every time. Rotation happens
+    exclusively through _rotate_api_key(), on a 429 (quota exhausted) or an
+    invalid-key error — never implicitly.
+    (Text-generation calls additionally fail over via core.llm_router.)"""
+    global _gemini_key_index
+    keys = _load_gemini_keys()
     if not keys:
         return ""
-    return keys[next(_gemini_key_cycle) % len(keys)]
+    return keys[_gemini_key_index % len(keys)]
+
+
+def _rotate_api_key() -> bool:
+    """Advance to the next configured Gemini key. Returns True when the index
+    actually moved (multiple keys configured); False when there is only one —
+    the caller then falls back to whatever it does without an alternate."""
+    global _gemini_key_index
+    n = len(_load_gemini_keys())
+    if n <= 1:
+        return False
+    _gemini_key_index += 1
+    return True
 
 
 def _load_system_prompt() -> str:
@@ -492,6 +548,36 @@ def _load_system_prompt() -> str:
         )
 
 _CTRL_RE = re.compile(r"<ctrl\d+>", re.IGNORECASE)
+
+
+def _is_quota_error(e: BaseException) -> bool:
+    """True when `e` (or anything it wraps — TaskGroup bundles children) is a
+    quota/limit error: HTTP 429, RESOURCE_EXHAUSTED, or rate/budget text.
+    The shapes seen live: '429 You exceeded your current quota',
+    'RESOURCE_EXHAUSTED', and websockets close 1013/1008 with quota reason
+    text. String-keyed like every other classifier in this file, so a change
+    in google-genai's error formatting degrades to the generic retry path
+    instead of crashing."""
+    seen: set[int] = set()
+    stack: list[BaseException] = [e]
+    while stack:
+        cur = stack.pop()
+        if id(cur) in seen:
+            continue
+        seen.add(id(cur))
+        s = str(cur)
+        if ("429" in s
+                or "RESOURCE_EXHAUSTED" in s
+                or "rate limit" in s.lower()
+                or "quota" in s.lower()):
+            return True
+        for nxt in (getattr(cur, "__cause__", None), getattr(cur, "__context__", None)):
+            if isinstance(nxt, BaseException):
+                stack.append(nxt)
+        for sub in getattr(cur, "exceptions", ()) or ():
+            if isinstance(sub, BaseException):
+                stack.append(sub)
+    return False
 
 
 def _fmt_time_left(td) -> str:
@@ -1381,6 +1467,32 @@ class JarvisLive:
             f"Use this to calculate exact times for reminders.\n\n"
         )
 
+        # Fresh-session journal tail (2026-10-01). A process restart previously
+        # started the model with a completely blank slate — the conversation
+        # journal was only reachable via the recall_memory tool, which the
+        # model does not think to call for anything it does not know was
+        # forgotten. Folding the last few turns into the prompt closes that
+        # gap the same way the in-proc _carry_context seam does, but across
+        # restarts. Gated to fresh sessions only: a resumed or carried session
+        # already has its context from the handle or the continuation block,
+        # and pasting the same turns twice teaches the model to repeat itself.
+        journal_ctx = ""
+        if not self._resume_handle and not self._carry_context:
+            try:
+                from memory.conversation_journal import recent_journal_tail
+                _tail = recent_journal_tail(max_chars=1200)
+                if _tail:
+                    journal_ctx = (
+                        "[CONVERSATION RESUMED]\n"
+                        "This assistant process restarted. Your recent past "
+                        "exchanges with the user, oldest first:\n\n"
+                        + _tail + "\n\nDo NOT re-greet or reintroduce yourself. "
+                        "Continue naturally; you may reference these only if "
+                        "the user brings them up.\n\n"
+                    )
+            except Exception as _journal_err:
+                print(f"[Memory] journal tail skipped: {_journal_err}")
+
         # Identity injection — overrides any hardcoded name in prompt.txt
         _addr = (f"ADDRESS: Always call the user '{_user_name}'."
                  if _user_name
@@ -1456,6 +1568,8 @@ class JarvisLive:
             parts.append(astro_ctx)
         if mem_str:
             parts.append(mem_str)
+        if journal_ctx:
+            parts.append(journal_ctx)
         # Installed GitHub skills: injected on every (re)build so installs,
         # upgrades and enable/disable take effect without a restart.
         try:
@@ -1516,6 +1630,15 @@ class JarvisLive:
             #  To restore it on a 2.5 native-audio model, add back:
             #  cfg["enable_affective_dialog"] = True )
             cfg["proactivity"] = types.ProactivityConfig(proactive_audio=True)
+        # Deliberate thinking (2026-10-01): get_thinking_enabled() existed in
+        # config_manager for two releases but was never read by anyone — a
+        # dead toggle. The Live models accept thinking_config at connect time,
+        # so the switch now reaches the session. Off by default (latency is
+        # this app's brand); on, the model reasons before hard answers instead
+        # of guessing. Auto-reverts on the same config-drift path as
+        # proactivity above if a future model rejects the field.
+        if get_thinking_enabled():
+            cfg["thinking_config"] = types.ThinkingConfig(include_thoughts=False)
         return types.LiveConnectConfig(**cfg)
 
     async def _execute_tool(self, fc) -> types.FunctionResponse:
@@ -3115,6 +3238,25 @@ class JarvisLive:
                     self._conn_backoff = 0
                     continue
 
+                # Quota exhausted on the CURRENT key (2026-10-01): try the
+                # next configured key before backing off. Deliberately placed
+                # BEFORE the handle-rejection branch below — a 429 that kills
+                # the socket is not a dead handle, and the key must move
+                # together with the handle it is pinned to. In a multi-key
+                # setup this turns "out of quota until midnight" into an
+                # instant hop; with a single key it degrades to the plain
+                # backoff retry, exactly as before.
+                if _is_quota_error(e):
+                    if _rotate_api_key():
+                        print(f"[JARVIS] 🔑 429 on current key — rotating to key #{_gemini_key_index % max(1, len(_load_gemini_keys()))} "
+                              f"(handle travels with it; retrying now)")
+                        self.ui.write_log("SYS: Quota exhausted — switching to the next API key.")
+                        self._conn_backoff = 0
+                    else:
+                        print("[JARVIS] 🔑 429 and no alternate key configured — backing off")
+                        self._conn_backoff = min(max(getattr(self, "_conn_backoff", 3) * 2, 3), 60)
+                    continue
+
                 err_str = str(e)
                 # Transient network blips (a cancelled connect, a dropped
                 # handshake) are expected and retried below — a 20-line
@@ -3144,8 +3286,18 @@ class JarvisLive:
                     )
                     continue
 
-                # Invalid API key — stop hammering the API, prompt re-configuration
+                # Invalid API key — stop hammering the API, prompt re-configuration.
+                # With several keys configured, try the next one first: the
+                # failure may be this key alone (revoked, wrong project), and
+                # prompting for a new key that would then be the 7th of 7 is
+                # a dead end. Only when every key has been tried does the
+                # reconfiguration prompt fire.
                 if "API key not valid" in err_str or "1007" in err_str:
+                    if _rotate_api_key():
+                        print(f"[JARVIS] 🔑 Key rejected — rotating to key #{_gemini_key_index % max(1, len(_load_gemini_keys()))}")
+                        self.ui.write_log("SYS: API key rejected — switching to the next configured key.")
+                        self._conn_backoff = 0
+                        continue
                     self.ui.write_log("ERR: API key invalid — please re-enter your key.")
                     self.ui.set_state("SLEEPING")
                     self.ui.prompt_reconfig()

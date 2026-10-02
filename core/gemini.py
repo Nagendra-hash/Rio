@@ -77,6 +77,12 @@ if getattr(sys, "frozen", False):
     _BASE = Path(sys.executable).parent
 else:
     _BASE = Path(__file__).resolve().parent.parent
+# JARVIS_HOME (pendrive mode): the key file is writable state, so it follows
+# the relocatable home — same contract as memory_manager.get_base_dir.
+import os as _os_home
+_home = _os_home.environ.get("JARVIS_HOME", "").strip()
+if _home:
+    _BASE = Path(_home).expanduser().resolve()
 
 _KEY_FILE = _BASE / "config" / "api_keys.json"
 

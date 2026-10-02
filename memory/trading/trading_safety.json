@@ -5,7 +5,7 @@
   "max_position_usd": 1000,
   "max_daily_trades": 10,
   "cooldown_seconds": 60,
-  "require_confirmation": false,
+  "require_confirmation": true,
   "symbols_whitelist": [],
   "symbols_blacklist": [],
   "min_signal_score": 3.0

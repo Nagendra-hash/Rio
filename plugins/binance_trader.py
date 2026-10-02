@@ -26,7 +26,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+import os
+
 _BASE = Path(__file__).resolve().parent.parent
+# JARVIS_HOME (pendrive mode): trading state (live_trades.jsonl, safety config)
+# is writable per-drive state, and the API config lives with it — same contract
+# as memory_manager.get_base_dir.
+_home = os.environ.get("JARVIS_HOME", "").strip()
+if _home:
+    _BASE = Path(_home).expanduser().resolve()
 _TRADING_DIR = _BASE / "memory" / "trading"
 _API_CONFIG = _BASE / "config" / "api_keys.json"
 _TRADE_LOG = _TRADING_DIR / "live_trades.jsonl"

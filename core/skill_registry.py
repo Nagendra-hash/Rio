@@ -26,7 +26,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+import os as _os_home
+_BASE_HOME = _os_home.environ.get("JARVIS_HOME", "").strip()
+BASE_DIR = (Path(_BASE_HOME).expanduser().resolve() if _BASE_HOME
+            else Path(__file__).resolve().parent.parent)
 SKILLS_DIR = BASE_DIR / "skills"
 REGISTRY_PATH = SKILLS_DIR / "installed_skills.json"
 

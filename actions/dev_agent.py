@@ -7,6 +7,10 @@ from pathlib import Path
 
 
 def get_base_dir():
+    import os
+    home = os.environ.get("JARVIS_HOME", "").strip()
+    if home:
+        return Path(home).expanduser().resolve()
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
     return Path(__file__).resolve().parent.parent

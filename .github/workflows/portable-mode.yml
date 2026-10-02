@@ -1,0 +1,63 @@
+# CI for pendrive mode (portable.bat / portable.sh / scripts/build_portable.py).
+#
+# The portable tests are static source checks plus one JARVIS_HOME subprocess
+# probe — everything they import (memory.config_manager, memory.memory_manager,
+# memory.conversation_journal) is stdlib-only, so this job needs nothing but
+# pytest. It deliberately does NOT install requirements.txt: the full
+# dependency set is 2–4 GB (PyQt6, opencv, playwright, ...) and would slow
+# every CI run down for no benefit here. Job runtime stays ~30 s.
+#
+# Python 3.11+ is required because test_writable_paths_follow_jarvis_home uses
+# pathlib.Path.is_relative_to — 3.9+ — while the launchers and the venv-setup
+# mode of portable.sh require 3.11+. The matrix covers the floor, the version
+# the dev venv uses, and current stable.
+name: portable-mode
+
+on:
+  push:
+    paths:
+      - "portable.sh"
+      - "portable.bat"
+      - "scripts/build_portable.py"
+      - "tests/test_portable_mode.py"
+      - "memory/config_manager.py"
+      - "memory/memory_manager.py"
+      - "memory/conversation_journal.py"
+      - ".github/workflows/portable-mode.yml"
+  pull_request:
+    paths:
+      - "portable.sh"
+      - "portable.bat"
+      - "scripts/build_portable.py"
+      - "tests/test_portable_mode.py"
+      - "memory/config_manager.py"
+      - "memory/memory_manager.py"
+      - "memory/conversation_journal.py"
+      - ".github/workflows/portable-mode.yml"
+
+jobs:
+  test:
+    name: portable tests (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install pytest
+        run: python -m pip install --upgrade pip pytest
+
+      - name: Syntax-check portable.sh under bash
+        run: bash -n portable.sh
+
+      - name: Run portable mode tests
+        run: python -m pytest tests/test_portable_mode.py -v
+
+      - name: Run standalone runner (repo convention, exit 0/1/2)
+        run: python tests/test_portable_mode.py

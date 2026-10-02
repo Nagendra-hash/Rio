@@ -9,8 +9,11 @@ gemini-2.5-flash-native-audio-latest to ride it out.
 
 Run this BEFORE switching back: it feeds a spoken question ("Hey Jarvis, what
 time is it right now?") into each candidate model and reports whether the model
-(a) transcribed the speech and (b) produced a spoken reply. Switch
-"live_model" in config/api_keys.json only to a model with MODEL TURN: yes.
+(a) transcribed the speech and (b) produced a spoken reply — and (c) how fast:
+time to first input transcription, first model turn, and first spoken reply
+(output transcription ≈ when the voice starts). The end summary ranks healthy
+models fastest-first, so a degraded-but-alive model can be told apart from a
+snappy one before committing "live_model" in config/api_keys.json to it.
 
 Usage:
   .venv/bin/python scripts/diag_live_speech_health.py            # all candidates
@@ -47,8 +50,13 @@ FIXTURE_WAV = BASE / "tests" / "fixtures" / "speech_probe_16k.wav"
 CHUNK = 2048
 PATIENCE_NO_TURN_S = 40
 MODELS = [
-    "models/gemini-3.1-flash-live-preview",       # historical default
-    "models/gemini-2.5-flash-native-audio-latest",  # 2026-09-30 failover
+    "models/gemini-3.1-flash-live-preview",         # historical default
+    "models/gemini-3.8-live",                       # newest general Live model on this key
+    "models/gemini-2.5-flash-native-audio-latest",  # 2026-09-30 failover (current)
+    # Pinned snapshots of the failover family: the -latest alias can lag or
+    # break independently of the underlying model, so probe the dated ones too.
+    "models/gemini-2.5-flash-native-audio-preview-09-2025",
+    "models/gemini-2.5-flash-native-audio-preview-12-2025",
 ]
 
 
@@ -88,10 +96,18 @@ def _cfg() -> types.LiveConnectConfig:
     )
 
 
-async def _trial(model: str, audio: bytes) -> bool:
+async def _trial(model: str, audio: bytes) -> dict:
+    """Feed the spoken question and score the model.
+
+    Returns {"model_turn", "transcribed", "t_transcribe", "t_model_turn",
+    "t_reply"} — the t_* fields are seconds from audio start to the first
+    input transcription, first model turn, and first spoken reply
+    (output transcription ≈ when the voice starts)."""
     client = genai.Client(api_key=_key(),
                           http_options={"api_version": "v1alpha", "timeout": 120_000})
     t0 = time.time()
+    result = {"model_turn": False, "transcribed": False,
+              "t_transcribe": None, "t_model_turn": None, "t_reply": None}
     try:
         async with asyncio.timeout(75):
             async with client.aio.live.connect(model=model, config=_cfg()) as session:
@@ -102,31 +118,38 @@ async def _trial(model: str, audio: bytes) -> bool:
                             data=audio[i:i + CHUNK], mime_type="audio/pcm;rate=16000"))
                         await asyncio.sleep(0.032)
                 feeder = asyncio.create_task(feed())
-                iat = model_turn = False
                 async for msg in session.receive():
                     sc = getattr(msg, "server_content", None)
                     if sc is not None:
                         it = getattr(sc, "input_transcription", None)
                         if it is not None and getattr(it, "text", None):
-                            if not iat:
-                                print(f"    transcribed at {time.time()-t0:.1f}s")
-                            iat = True
+                            if not result["transcribed"]:
+                                result["t_transcribe"] = time.time() - t0
+                                print(f"    transcribed at {result['t_transcribe']:.1f}s")
+                            result["transcribed"] = True
                         if getattr(sc, "model_turn", None):
-                            if not model_turn:
-                                print(f"    model turn at {time.time()-t0:.1f}s")
-                            model_turn = True
+                            if result["t_model_turn"] is None:
+                                result["t_model_turn"] = time.time() - t0
+                                print(f"    model turn at {result['t_model_turn']:.1f}s")
+                            result["model_turn"] = True
                         ot = getattr(sc, "output_transcription", None)
                         if ot is not None and getattr(ot, "text", None):
+                            if result["t_reply"] is None:
+                                result["t_reply"] = time.time() - t0
                             print(f"    reply: {ot.text.strip()[:70]!r}")
-                        if getattr(sc, "turn_complete", None) and (model_turn or time.time() - t0 > PATIENCE_NO_TURN_S):
+                        if getattr(sc, "turn_complete", None) and (result["model_turn"] or time.time() - t0 > PATIENCE_NO_TURN_S):
                             break
                 feeder.cancel()
-                print(f"  => transcribed: {iat} | MODEL TURN: {model_turn} "
-                      f"({time.time()-t0:.0f}s)")
-                return model_turn
+                extra = (f" | first reply {result['t_reply']:.1f}s"
+                         if result["t_reply"] is not None else "")
+                print(f"  => transcribed: {result['transcribed']} | "
+                      f"MODEL TURN: {result['model_turn']} "
+                      f"({time.time()-t0:.0f}s){extra}")
+                return result
     except Exception as e:
         print(f"  => FAILED {time.time()-t0:.0f}s: {type(e).__name__}: {str(e)[:120]}")
-        return False
+        result["failed"] = str(e)[:120]
+        return result
 
 
 async def main() -> None:
@@ -141,25 +164,44 @@ async def main() -> None:
         model = argv[i + 1]
         as_json = "--json" in argv
         _ensure_speech_wav()
-        healthy = await _trial(model, _load_audio())
+        r = await _trial(model, _load_audio())
+        healthy = r["model_turn"]
         if as_json:
             print(json.dumps({"model": model, "model_turn": healthy,
+                              "t_transcribe": r["t_transcribe"],
+                              "t_model_turn": r["t_model_turn"],
+                              "t_reply": r["t_reply"],
                               "checked_at": time.strftime("%Y-%m-%dT%H:%M:%S")}))
         raise SystemExit(0 if healthy else 1)
 
     flt = argv[0] if argv else ""
     _ensure_speech_wav()
     audio = _load_audio()
-    healthy = []
+    results = []
     for model in MODELS:
         if flt and flt.lower() not in model.lower():
             continue
         print(f"=== {model} ===")
-        if await _trial(model, audio):
-            healthy.append(model)
+        results.append((model, await _trial(model, audio)))
         await asyncio.sleep(2)
-    print("\nHEALTHY (safe to set as live_model):",
-          healthy if healthy else "NONE — stay on current model")
+
+    healthy = [(m, r) for m, r in results if r["model_turn"]]
+    if not healthy:
+        print("\nHEALTHY (safe to set as live_model): NONE — stay on current model")
+        return
+
+    def _speed(item):
+        _, r = item
+        if r["t_reply"] is not None:
+            return r["t_reply"]
+        return r["t_model_turn"] if r["t_model_turn"] is not None else 999.0
+
+    healthy.sort(key=_speed)
+    print("\nHEALTHY (safe to set as live_model), fastest first:")
+    for rank, (m, r) in enumerate(healthy, 1):
+        reply = f"{r['t_reply']:.1f}s" if r["t_reply"] is not None else "n/a"
+        turn = f"{r['t_model_turn']:.1f}s" if r["t_model_turn"] is not None else "n/a"
+        print(f"  {rank}. {m} — first reply {reply} | model turn {turn}")
 
 
 if __name__ == "__main__":

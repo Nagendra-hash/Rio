@@ -31,7 +31,11 @@ from core.skill_registry import (
     skill_dir, upsert_skill,
 )
 
-_ACTIONS_DIR = BASE_DIR / "actions"
+# The app tree is NOT the writable home: BASE_DIR follows JARVIS_HOME (pendrive
+# mode) so skills/ lands on the drive, but action payloads must install next to
+# the code itself, wherever this file physically is. Deriving _ACTIONS_DIR from
+# BASE_DIR made installs vanish when launched via portable.sh/portable.bat.
+_ACTIONS_DIR = Path(__file__).resolve().parent
 _TIMEOUT = 60  # seconds per HTTP fetch
 
 _URL_RE = re.compile(

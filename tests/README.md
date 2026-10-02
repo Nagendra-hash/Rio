@@ -28,6 +28,8 @@ exit codes 0 = pass / 1 = regression / 2 = env error):
 .venv/bin/python tests/test_dashboard_offline.py        # offline/reconnect behavior
 .venv/bin/python tests/test_dashboard_pwa_install.py    # PWA install flow
 .venv/bin/python tests/test_voice_keepalive.py          # phone-mic keep-alive
+.venv/bin/python tests/test_rotation_smoke.py           # rotation-smoke classifier + notify
+.venv/bin/python tests/test_live_model_watch.py         # live-model watchdog + incident JSONL
 ```
 
 Missing deps for the browser suite:
@@ -74,6 +76,49 @@ passes cleanly. Assert-style tests that return `None` are untouched.
 Pre-existing test: mic tap opens the audio socket; killing the socket
 mid-session auto-reconnects without user interaction; a second tap stops
 cleanly with no zombie reconnects.
+
+### `test_live_model_watch.py` — live-model watchdog + the incident-JSONL contract
+
+Every 30 min `systemd/jarvis-live-model-watch.sh` probes the failover candidate
+(`gemini-3.1-flash-live-preview` since the 2026-09-30 Live-voice incident) and
+appends the outcome to `memory/incidents.jsonl` — the durable timeline that
+survives `/tmp` cleanups, unlike `/tmp/jarvis_live_model_watch.log`.
+
+The **incident-JSONL contract** locked down by the tests:
+
+1. **Shape** — one JSON object per line (plain `json.loads` per line must
+   never fail). Every record carries `event`, `id` (the incident timeline it
+   belongs to, default `live-20260930-3.1`), `model`, and an ISO-8601
+   `at` with local offset.
+2. **Probe verdict embedded** — the probe's own `--probe --json` output is
+   parsed (last `{…}` line wins) into a `probe` field; chatter before it must
+   never leak into the log.
+3. **Events** — `probe_broken` (verdict, streak reset), `probe_healthy`
+   (`streak`/`required`), `recovered` (flip done, `flipped_to`),
+   `flip_rolled_back` (`rolled_back_to`). Historical records may also include
+   `incident_open`/`full_sweep` written by hand or by the speech diag.
+4. **Append-only** — runs never truncate; a broken→healthy timeline reads in
+   order.
+5. **Opt-out, not fallback** — `JARVIS_LMW_INCIDENTS=""` disables logging
+   (dash-only default `${VAR-default}`, NOT `:-`, which would treat empty as
+   unset and resurrect the default path).
+6. **Best-effort, always** — a broken/unwritable log path must not change the
+   probe cycle's exit code or the flip/rollback behavior. Alarms come from the
+   systemd unit's exit status, not from the JSONL.
+7. **Flip semantics unchanged** — 2 consecutive healthy probes to flip, config
+   restored + exit 1 on a failed flip (the alarm surface, same convention as
+   `jarvis-rotation-smoke.service`).
+
+Consume the log with plain line-JSON tooling:
+
+```bash
+jq -c 'select(.event=="probe_broken")' memory/incidents.jsonl        # if jq exists
+.venv/bin/python -c "import json,sys; [print(json.loads(l)['event']) for l in open('memory/incidents.jsonl') if l.strip()]"
+```
+
+The tests drive the REAL script through its `JARVIS_LMW_*` seams — only the
+probe (stub emitting the real output grammar) and systemctl (active/inactive)
+are stubbed — so every assertion runs the exact code path a timer run takes.
 
 ## Isolation guarantees
 

@@ -34,6 +34,12 @@ import time
 from pathlib import Path
 
 _BASE = Path(__file__).resolve().parent.parent
+# JARVIS_HOME (pendrive mode): the key file read at heal time lives in the
+# relocatable home — on a fresh host PC the drive is the only place it exists.
+import os as _os
+_home = _os.environ.get("JARVIS_HOME", "").strip()
+if _home:
+    _BASE = Path(_home).expanduser().resolve()
 
 # ── import name → PyPI distribution name (the ones that differ) ──────────────
 _IMPORT_TO_PYPI: dict[str, str] = {

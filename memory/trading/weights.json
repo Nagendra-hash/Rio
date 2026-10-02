@@ -1,12 +1,12 @@
 {
   "weights": {
-    "ema_trend": 2.5444,
-    "triple_rsi": 1.772,
-    "sd_zones": 1.4092,
-    "order_blocks": 0.4586,
+    "ema_trend": 2.7764,
+    "triple_rsi": 1.785,
+    "sd_zones": 1.4957,
+    "order_blocks": 0.3742,
     "vol_trail": 0.6506,
     "reversal_pivot": 0.5677,
-    "alligator": 2.6678,
+    "alligator": 2.8754,
     "ema_stack": 3.0,
     "mtf_alignment": 3.0,
     "bnf_dip": 1.0
@@ -23,5 +23,5 @@
     "mtf_alignment": true,
     "bnf_dip": true
   },
-  "updated": "2026-09-30T21:02:30"
+  "updated": "2026-10-01T23:01:52"
 }
