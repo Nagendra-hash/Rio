@@ -101,7 +101,10 @@ except ImportError:
 try:
     import pyautogui
     _PYAUTOGUI = True
-except ImportError:
+except Exception:
+    # ImportError when absent, but a bare `import pyautogui` on a
+    # display-less machine raises KeyError('DISPLAY') — headless CI and
+    # ssh-only boxes both land here, and media keys are simply unavailable.
     _PYAUTOGUI = False
 
 from config import is_windows, is_mac, is_linux

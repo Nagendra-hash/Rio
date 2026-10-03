@@ -12,7 +12,8 @@ from urllib.parse import quote_plus
 try:
     import pyautogui
     _PYAUTOGUI = True
-except ImportError:
+except Exception:
+    # ImportError when absent; KeyError('DISPLAY') on headless machines.
     _PYAUTOGUI = False
 
 try:
