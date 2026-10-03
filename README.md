@@ -1,5 +1,16 @@
 # J.A.R.V.I.S. — Mark LIII
 
+![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
+![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-brightgreen)
+![Voice](https://img.shields.io/badge/Gemini-Live%20API-4285F4?logo=google&logoColor=white)
+![Tests](https://img.shields.io/badge/tests-offline%20pytest-success)
+![License](https://img.shields.io/badge/license-CC%20BY--NC%204.0-orange)
+![Upstream](https://img.shields.io/badge/upstream-Mark%20LV%20by%20FatihMakes-8A2BE2)
+
+<p align="center">
+  <img src="docs/hud-screenshot.png" alt="The JARVIS HUD — holographic avatar, live session, media panel" width="880">
+</p>
+
 A real-time voice assistant that hears, sees, speaks, and controls your computer — **Windows, macOS, Linux**. Built on the **Gemini Live API** for native audio streaming, with a PyQt6 HUD that gives it a holographic face, a screen to play media on, and a phone dashboard for when you're away from the desk.
 
 > Upstream lineage: [FatihMakes/Mark-LV](https://github.com/FatihMakes) (Mark LIII → LIV → LV). This repo continues that line — see [Credits](#credits--license).
