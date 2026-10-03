@@ -53,6 +53,11 @@ dist/
 # ── Virtual environments ──────────────────────────────────────────────────────
 .venv/
 venv/
+.venv-tradingagents/
+
+# Secrets that once got committed: live API keys, device pairing tokens.
+config/api_keys.json.bak*
+config/dashboard_devices.json
 env/
 ENV/
 

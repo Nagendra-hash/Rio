@@ -229,9 +229,18 @@ def _reporting_period(window: str) -> str:
 # needs the handoff schema — the CLI returns ready-to-read text.
 # ══════════════════════════════════════════════════════════════════════════════
 
+import os as _os
 import shutil as _shutil
 
-_HERMES_BIN = _shutil.which("hermes") or "/home/nagendra/.local/bin/hermes"
+_HERMES_BIN = _shutil.which("hermes") or str(Path.home() / ".local" / "bin" / "hermes")
+_HERMES_ENV = {
+    "PATH": _os.pathsep.join([
+        str(Path.home() / ".local" / "bin"),
+        str(Path.home() / ".hermes" / "node" / "bin"),
+        "/usr/local/bin", "/usr/bin", "/bin",
+    ]),
+    "HOME": str(Path.home()),
+}
 _HERMES_TIMEOUT_S = 180          # one full agent turn, bounded
 _HERMES_ENABLED_KEY = "desk_hermes_fallback"   # plugin_config: market_desk
 
@@ -251,9 +260,7 @@ def _hermes_research(role: str, task: str) -> Optional[str]:
             [_HERMES_BIN, "-z", task],
             capture_output=True, text=True,
             timeout=_HERMES_TIMEOUT_S,
-            env={"PATH": "/home/nagendra/.local/bin:/home/nagendra/.hermes/node/bin:"
-                          "/usr/local/bin:/usr/bin:/bin",
-                 "HOME": "/home/nagendra"},
+            env=_HERMES_ENV,
         )
     except FileNotFoundError:
         return None
@@ -271,7 +278,7 @@ def hermes_bridge_status() -> dict:
     """Bridged-provider posture for 'status' — measurements, not vibes."""
     return {
         "hermes_cli": _hermes_available(),
-        "hermes_gateway": Path("/home/nagendra/.hermes/gateway.sock").exists(),
+        "hermes_gateway": (Path.home() / ".hermes" / "gateway.sock").exists(),
         "fallback_enabled": bool(_setting_val(_HERMES_ENABLED_KEY, True)),
     }
 

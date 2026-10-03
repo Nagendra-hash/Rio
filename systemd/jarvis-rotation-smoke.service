@@ -3,7 +3,7 @@ Description=JARVIS — post-rotation journald smoke check (❌ Recv / genai erro
 
 [Service]
 Type=oneshot
-ExecStart=/home/nagendra/Mark-LIII/systemd/jarvis-rotation-smoke.sh
+ExecStart=/home/nagendra/Mark-III/systemd/jarvis-rotation-smoke.sh
 # Results land in /tmp/jarvis_rotation_smoke.log; a failed check leaves this
 # unit "failed" until the next clean run — that is the alarm surface.
 # Headless-safe: the script only reads journald, but DISPLAY keeps parity with

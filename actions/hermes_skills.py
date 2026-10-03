@@ -8,10 +8,22 @@ do?" and to pick the right skill before delegating via hermes_task.
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
+from pathlib import Path
 
-_HERMES = shutil.which("hermes") or "/home/nagendra/.local/bin/hermes"
+_HOME = Path.home()
+_HERMES = shutil.which("hermes") or str(_HOME / ".local" / "bin" / "hermes")
+# Same fixed env as actions/hermes_task.py — see that file for why.
+_ENV = {
+    "PATH": os.pathsep.join([
+        str(_HOME / ".local" / "bin"),
+        str(_HOME / ".hermes" / "node" / "bin"),
+        "/usr/local/bin", "/usr/bin", "/bin",
+    ]),
+    "HOME": str(_HOME),
+}
 _TIMEOUT_LIST = 30  # seconds
 
 
@@ -22,9 +34,7 @@ def hermes_skills(parameters: dict, player=None) -> str:
     try:
         proc = subprocess.run(
             [_HERMES, *args],
-            capture_output=True, text=True, timeout=_TIMEOUT_LIST,
-            env={"PATH": "/home/nagendra/.local/bin:/home/nagendra/.hermes/node/bin:/usr/local/bin:/usr/bin:/bin",
-                 "HOME": "/home/nagendra"},
+            capture_output=True, text=True, timeout=_TIMEOUT_LIST, env=_ENV,
         )
     except FileNotFoundError:
         return "Hermes CLI not found on this machine."

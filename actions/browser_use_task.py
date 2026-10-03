@@ -23,8 +23,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-_PYTHON = sys.executable or "/home/nagendra/Mark-LIII/.venv/bin/python"
-_RUNNER = Path(__file__).resolve().parent.parent / "scripts" / "browser_use_run.py"
+_ROOT   = Path(__file__).resolve().parent.parent
+_PYTHON = sys.executable or str(_ROOT / ".venv" / "bin" / "python")
+_RUNNER = _ROOT / "scripts" / "browser_use_run.py"
 _TIMEOUT_TASK = 300   # seconds; agent loops are slower than plain tools
 
 

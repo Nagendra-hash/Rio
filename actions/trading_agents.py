@@ -21,8 +21,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-_PYTHON = "/home/nagendra/Mark-LIII/.venv-tradingagents/bin/python"
-_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "trading_agents_run.py"
+_ROOT   = Path(__file__).resolve().parent.parent
+_PYTHON = str(_ROOT / ".venv-tradingagents" / "bin" / "python")
+_SCRIPT = _ROOT / "scripts" / "trading_agents_run.py"
 _TIMEOUT = 540   # seconds: a trimmed run is 5-9 min through the free pool
 
 
@@ -37,6 +38,9 @@ def trading_agents(parameters: dict, player=None, speak=None) -> str:
         return "Which ticker should the analyst team evaluate, sir?"
     if not _SCRIPT.exists():
         return "The TradingAgents runner is missing, sir — check scripts/trading_agents_run.py."
+    if not Path(_PYTHON).exists():
+        return ("The TradingAgents venv is missing, sir — rebuild .venv-tradingagents "
+                "with the framework's requirements installed.")
 
     if player:
         player.write_log(f"[trading-agents] {ticker} {date} analysts={analysts}")

@@ -177,6 +177,98 @@ def _process_image(path: Path, action: str, params: dict, speak=None) -> str:
 
     return _process_image(path, "describe", {"instruction": f"{action}: {params}"})
 
+def _ocr_langs(params: dict) -> str:
+    """Resolve the tesseract -l string for Devanagari OCR.
+
+    'hindi,sanskrit' (or any spelling with those words) maps to hin+san; a
+    raw tesseract code like 'hin+eng' passes through untouched. With no
+    lang given, auto-detect which Devanagari models are actually installed
+    so a machine missing `san` degrades to hin+eng instead of failing.
+    """
+    LANG_ALIASES = {"hindi": "hin", "sanskrit": "san",
+                    "english": "eng", "hin": "hin", "san": "san"}
+    requested = str((params or {}).get("lang", "")).strip().lower()
+    if requested:
+        if requested in LANG_ALIASES:
+            return LANG_ALIASES[requested]
+        # comma/word forms → plus form, translating known aliases
+        parts = [p.strip() for p in requested.replace("+", ",").split(",") if p.strip()]
+        codes = [LANG_ALIASES.get(p, p) for p in parts]
+        return "+".join(codes)
+
+    # Auto: whatever Devanagari models exist, plus English (always present).
+    langs = []
+    try:
+        out = subprocess.run(["tesseract", "--list-langs"],
+                             capture_output=True, text=True, timeout=30)
+        installed = {ln.strip() for ln in out.stdout.splitlines()[1:] if ln.strip()}
+    except Exception:
+        installed = set()
+    for code in ("hin", "san", "eng"):
+        if code in installed:
+            langs.append(code)
+    return "+".join(langs) or "eng"
+
+
+def _pdf_ocr(pdf_path: Path, out_dir: Path = None, params: dict = None,
+             dpi: int = 300) -> str:
+    """OCR an image-only (scanned) PDF via pdftoppm → tesseract.
+    Rasterizes each page at `dpi` (300 is the sweet spot for Devanagari
+    conjuncts — lower mangles matras), then OCRs each page image with the
+    languages from _ocr_langs(). Concatenates per-page text with page marks.
+    Raises nothing: every failure mode returns a readable message, because
+    the caller is the LLM tool surface.
+    """
+    out_dir = out_dir or pdf_path.parent
+    langs = _ocr_langs(params or {})
+
+    if not shutil.which("pdftoppm"):
+        return "OCR unavailable: pdftoppm (poppler-utils) is not installed."
+    if not shutil.which("tesseract"):
+        return "OCR unavailable: tesseract is not installed."
+
+    prefix = out_dir / f".ocr_{pdf_path.stem}_{os.getpid()}"
+    try:
+        r = subprocess.run(
+            ["pdftoppm", "-r", str(dpi), "-png",
+             str(pdf_path), str(prefix)],
+            capture_output=True, text=True, timeout=600)
+        if r.returncode != 0:
+            return f"OCR failed: could not rasterize PDF ({(r.stderr or '').strip()[:150]})"
+
+        pages = sorted(out_dir.glob(prefix.name + "-*.png")) or \
+                sorted(out_dir.glob(prefix.name + "*.png"))
+        if not pages:
+            return "OCR failed: rasterization produced no page images."
+
+        chunks = []
+        for i, png in enumerate(pages, 1):
+            t = subprocess.run(
+                ["tesseract", str(png), "stdout", "-l", langs, "--psm", "6"],
+                capture_output=True, text=True, timeout=300)
+            page_text = (t.stdout or "").strip()
+            if page_text:
+                chunks.append(f"--- page {i} ---\n{page_text}")
+            try:
+                png.unlink()
+            except OSError:
+                pass
+
+        if not chunks:
+            return ""
+        return "\n\n".join(chunks)
+    except subprocess.TimeoutExpired:
+        return "OCR failed: timed out (PDF too large — try fewer pages)."
+    except Exception as e:
+        return f"OCR failed: {e}"
+    finally:
+        # Sweep any leftover page images even on the error paths.
+        for leftover in out_dir.glob(prefix.name + "*.png"):
+            try:
+                leftover.unlink()
+            except OSError:
+                pass
+
 def _process_pdf(path: Path, action: str, params: dict, speak=None) -> str:
     action = action or "summarize"
 
@@ -201,7 +293,24 @@ def _process_pdf(path: Path, action: str, params: dict, speak=None) -> str:
     if action in ("summarize", "extract_text", "translate_hint", "analyze", "reformat"):
         text = _extract_pdf_text()
         if not text.strip():
-            return "Could not extract text from PDF (may be scanned/image-based)."
+            # No text layer → scanned/image PDF. OCR it instead of dead-ending;
+            # extract_text persists the result so the user actually gets it.
+            ocr = _pdf_ocr(path, path.parent, params)
+            if not ocr.strip():
+                return ("Could not extract text from PDF — no text layer and "
+                        "OCR found no text (may be blank or too degraded).")
+            if action == "extract_text":
+                out = _output_path(path, "ocr_text", ".txt")
+                out.write_text(ocr, encoding="utf-8")
+                return f"OCR text extracted ({len(ocr)} chars). Saved: {out.name}"
+            # summarize/analyze/… feed the OCR text into the AI step below
+            # by substituting it for the empty extraction.
+            text = ocr
+        
+        if action == "extract_text":
+            out = _output_path(path, "text", ".txt")
+            out.write_text(text, encoding="utf-8")
+            return f"Text extracted ({len(text)} chars). Saved: {out.name}"
 
         if action == "extract_text":
             out = _output_path(path, "text", ".txt")
@@ -234,6 +343,18 @@ def _process_pdf(path: Path, action: str, params: dict, speak=None) -> str:
             return f"PDF: {pages} pages, size: {_file_size_str(path)}"
         except Exception:
             return f"PDF size: {_file_size_str(path)}"
+
+    if action in ("ocr", "ocr_hindi", "ocr_sanskrit"):
+        ocr = _pdf_ocr(path, path.parent, params)
+        if not ocr.strip():
+            return "OCR found no text — the PDF may be blank, or the scan is too degraded."
+        if ocr.startswith("OCR unavailable") or ocr.startswith("OCR failed"):
+            return ocr
+        if len(ocr) > 600 and params.get("save", True):
+            out = _output_path(path, "ocr", ".txt")
+            out.write_text(ocr, encoding="utf-8")
+            return f"{ocr[:400]}...\n\nFull OCR text ({len(ocr)} chars) saved: {out.name}"
+        return ocr
 
     if action == "to_word":
         text = _extract_pdf_text()
@@ -844,7 +965,7 @@ def file_processor(parameters: dict, player=None, speak=None) -> str:
 # ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
 TOOL = {
     "name": "file_processor",
-    "description": "Processes any file that the user has uploaded or dropped onto the interface. Use this when the user refers to an uploaded file and wants an action on it. Supports: images (describe/ocr/resize/compress/convert), PDFs (summarize/extract_text/to_word), Word docs & text files (summarize/fix/reformat/translate), CSV/Excel (analyze/stats/filter/sort/convert), JSON/XML (validate/format/analyze), code files (explain/review/fix/optimize/run/document/test), audio (transcribe/trim/convert/info), video (trim/extract_audio/extract_frame/compress/transcribe/info), archives (list/extract), presentations (summarize/extract_text). ALWAYS call this tool when a file has been uploaded and the user gives a command about it. If the user's command is ambiguous, pick the most logical action for that file type.",
+    "description": "Processes any file that the user has uploaded or dropped onto the interface. Use this when the user refers to an uploaded file and wants an action on it. Supports: images (describe/ocr/resize/compress/convert), PDFs (summarize/extract_text/ocr/to_word — 'ocr' reads scanned/image-only PDFs incl. Hindi & Sanskrit via tesseract), Word docs & text files (summarize/fix/reformat/translate), CSV/Excel (analyze/stats/filter/sort/convert), JSON/XML (validate/format/analyze), code files (explain/review/fix/optimize/run/document/test), audio (transcribe/trim/convert/info), video (trim/extract_audio/extract_frame/compress/transcribe/info), archives (list/extract), presentations (summarize/extract_text). ALWAYS call this tool when a file has been uploaded and the user gives a command about it. If the user's command is ambiguous, pick the most logical action for that file type.",
     "parameters": {
         "type": "OBJECT",
         "properties": {
@@ -854,7 +975,7 @@ TOOL = {
             },
             "action": {
                 "type": "STRING",
-                "description": "What to do with the file. Examples by type:\nimage: describe | ocr | resize | compress | convert | info\npdf: summarize | extract_text | to_word | info\ndocx/txt: summarize | fix | reformat | translate_hint | word_count | to_bullet\ncsv/excel: analyze | stats | filter | sort | convert | info\njson: validate | format | analyze | to_csv\ncode: explain | review | fix | optimize | run | document | test\naudio: transcribe | trim | convert | info\nvideo: trim | extract_audio | extract_frame | compress | transcribe | info | convert\narchive: list | extract\npptx: summarize | extract_text | analyze"
+                "description": "What to do with the file. Examples by type:\nimage: describe | ocr | resize | compress | convert | info\npdf: summarize | extract_text | ocr (scanned/image PDFs; Hindi+Sanskrit auto) | to_word | info\ndocx/txt: summarize | fix | reformat | translate_hint | word_count | to_bullet\ncsv/excel: analyze | stats | filter | sort | convert | info\njson: validate | format | analyze | to_csv\ncode: explain | review | fix | optimize | run | document | test\naudio: transcribe | trim | convert | info\nvideo: trim | extract_audio | extract_frame | compress | transcribe | info | convert\narchive: list | extract\npptx: summarize | extract_text | analyze"
             },
             "instruction": {
                 "type": "STRING",
@@ -863,6 +984,10 @@ TOOL = {
             "format": {
                 "type": "STRING",
                 "description": "Target format for conversion. E.g. 'mp3', 'pdf', 'csv', 'png'"
+            },
+            "lang": {
+                "type": "STRING",
+                "description": "Language hint for pdf/image OCR: 'hindi', 'sanskrit', 'hindi,sanskrit' (default auto-detects installed Devanagari models + English), or a raw tesseract code like 'hin+eng'."
             },
             "width": {
                 "type": "INTEGER",

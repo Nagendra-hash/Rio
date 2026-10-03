@@ -18,8 +18,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-_PYTHON = sys.executable or "/home/nagendra/Mark-LIII/.venv/bin/python"
-_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "browser_use_relogin.py"
+_ROOT   = Path(__file__).resolve().parent.parent
+_PYTHON = sys.executable or str(_ROOT / ".venv" / "bin" / "python")
+_SCRIPT = _ROOT / "scripts" / "browser_use_relogin.py"
 _TIMEOUT = 180   # seconds; headless logins take ~5 s, headed ones as long as the user takes
 
 

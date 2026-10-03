@@ -16,7 +16,7 @@ USAGE (from Hermes gateway hooks / skills):
 
     # document with caption (THE pdf flow):
     jarvis_inbox.py --channel telegram --chat 12345 \
-        --file "/home/nagendra/Mark-LIII/uploads/report.pdf" \
+        --file "$HOME/Mark-III/uploads/report.pdf" \
         --text "remember this document"
 
     # document only (caption arrives as a separate message in some clients):
@@ -39,7 +39,8 @@ from pathlib import Path
 
 # The local dashboard serves HTTPS with a self-signed cert (config/certs).
 DASHBOARD_URL = os.environ.get("JARVIS_DASHBOARD_URL", "https://127.0.0.1:8000")
-TOKEN_FILE = Path.home() / "Mark-LIII" / "config" / "api_keys.json"
+BASE = Path(__file__).resolve().parent.parent
+TOKEN_FILE = BASE / "config" / "api_keys.json"
 
 # The local dashboard usually serves HTTPS with a self-signed cert
 # (config/certs). Verify nothing for loopback delivery — the token is the

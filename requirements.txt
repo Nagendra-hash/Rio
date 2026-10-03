@@ -41,6 +41,10 @@ pyperclip
 pillow>=10,<13
 opencv-python>=4.8,<5
 mss>=9,<11
+jeepney                      # screen_processor — Wayland screenshot portal;
+                             # music_player — now-playing over MPRIS/D-Bus
+pycryptodome                 # music_player — JioSaavn stream URL decryption (DES)
+                             #   so songs play in the HUD, not in a browser
 
 # ── System, files & documents ─────────────────────────────────────────────────
 psutil>=5.9,<8
@@ -107,3 +111,12 @@ pynvml                       # system_monitor + the HUD's GPU meter (NVIDIA)
 # macOS / Linux OS actions (volume, brightness, reminders) shell out to native
 # tools (pactl / brightnessctl / osascript / systemd), so no extra Python
 # packages are needed there — nothing Windows-specific is ever pulled in.
+
+# ── Hermes bridge (Telegram / WhatsApp) ──────────────────────────────────────
+# The Hermes bridge adds nothing here on purpose. Hermes is a separate install
+# (its own venv at ~/.hermes, reached through the `hermes` CLI on PATH), and
+# both halves of the bridge are stdlib-only: the gateway hook
+# (hermes-hooks/jarvis-pdf-forward/) and the inbox entry point
+# (scripts/jarvis_inbox.py) speak to the local dashboard over urllib. The
+# outbound actions (actions/hermes_*.py) shell out to the CLI. Nothing to pip
+# install — see the jarvis-hermes-bridge skill.

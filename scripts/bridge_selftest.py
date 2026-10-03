@@ -48,14 +48,18 @@ import time
 import urllib.request
 from pathlib import Path
 
-_HOME       = "/home/nagendra"
-_HERMES     = shutil.which("hermes") or f"{_HOME}/.local/bin/hermes"
+_HOME       = Path.home()
+_HERMES     = shutil.which("hermes") or str(_HOME / ".local" / "bin" / "hermes")
 _INBOX      = Path(__file__).resolve().parent / "jarvis_inbox.py"
 _DASHBOARD  = os.environ.get("JARVIS_DASHBOARD_URL", "https://127.0.0.1:8000")
 _TASK_TIMEOUT = 240          # same budget as actions/hermes_task.py
 _ENV = {
-    "PATH": f"{_HOME}/.local/bin:{_HOME}/.hermes/node/bin:/usr/local/bin:/usr/bin:/bin",
-    "HOME": _HOME,
+    "PATH": os.pathsep.join([
+        str(_HOME / ".local" / "bin"),
+        str(_HOME / ".hermes" / "node" / "bin"),
+        "/usr/local/bin", "/usr/bin", "/bin",
+    ]),
+    "HOME": str(_HOME),
     # `systemctl --user` needs this when inherited from a bare context
     "XDG_RUNTIME_DIR": os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"),
 }
@@ -196,7 +200,7 @@ def inbound(chat: str | None) -> None:
     print("── inbound: Hermes → JARVIS (dashboard ping) ──")
     if chat is None:
         chat = "1"                     # same neutral chat id used in the 2026-09-27 drill
-        env_file = Path(_HOME) / ".hermes" / ".env"
+        env_file = _HOME / ".hermes" / ".env"
         try:
             for line in env_file.read_text(encoding="utf-8", errors="ignore").splitlines():
                 if line.startswith("TELEGRAM_HOME_CHANNEL="):

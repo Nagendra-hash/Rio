@@ -33,11 +33,11 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
-_HOME        = "/home/nagendra"   # same convention as actions/hermes_task.py
-_ENV_FILE    = Path(_HOME) / ".hermes" / ".env"
-_CONFIG_FILE = Path(_HOME) / ".hermes" / "config.yaml"
-_PID_FILE    = Path(_HOME) / ".hermes" / "gateway.pid"
-_HERMES      = shutil.which("hermes") or f"{_HOME}/.local/bin/hermes"
+_HOME        = Path.home()   # same convention as actions/hermes_task.py
+_ENV_FILE    = _HOME / ".hermes" / ".env"
+_CONFIG_FILE = _HOME / ".hermes" / "config.yaml"
+_PID_FILE    = _HOME / ".hermes" / "gateway.pid"
+_HERMES      = shutil.which("hermes") or str(_HOME / ".local" / "bin" / "hermes")
 
 _HTTP_TIMEOUT   = 6    # seconds per HTTP probe
 _CMD_TIMEOUT    = 6    # seconds per subprocess probe
@@ -54,8 +54,10 @@ def _env() -> dict:
     XDG_RUNTIME_DIR that `systemctl --user` needs when inherited from a
     context without it."""
     env = dict(os.environ)
-    env.setdefault("HOME", _HOME)
-    env.setdefault("PATH", f"{_HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin")
+    env.setdefault("HOME", str(_HOME))
+    env.setdefault("PATH", os.pathsep.join([
+        str(_HOME / ".local" / "bin"), "/usr/local/bin", "/usr/bin", "/bin",
+    ]))
     env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
     return env
 

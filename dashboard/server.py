@@ -72,6 +72,24 @@ def _get_gemini_key() -> str | None:
     except Exception:
         return None
 
+
+def _news_settings_deps():
+    """Resolve the news-key helpers, or None when unavailable.
+
+    Imported lazily and defensively: the dashboard is documented as optional
+    and must still boot when memory/ or actions/ can't be imported. The routes
+    that use these return a clear 503 in that case instead of failing the
+    whole app at import time.
+    """
+    try:
+        from memory.config_manager import (
+            get_news_key, save_news_key, mask_secret,
+        )
+        from actions.web_search import _newsapi_key_valid
+        return get_news_key, save_news_key, mask_secret, _newsapi_key_valid
+    except Exception:
+        return None
+
 _KEY_CHARS = [c for c in (string.ascii_uppercase + string.digits)
               if c not in ('O', 'I', 'L', '0', '1')]
 
@@ -471,6 +489,8 @@ class DashboardServer:
         self._command_queue               = asyncio.Queue()
         self._wake_callback               = None
         self._connect_callback            = None
+        self._phone_mic_callback          = None
+        self._ptt_callback                = None
         self._pending_keys: dict[str, float] = {}
         self._device_sessions: dict[str, dict] = {}  # device_token → {session_key}
         self._phone_audio_queue: asyncio.Queue    = asyncio.Queue(maxsize=200)
@@ -521,6 +541,34 @@ class DashboardServer:
 
     def set_wake_callback(self, fn) -> None:
         self._wake_callback = fn
+
+    def set_phone_mic_callback(self, fn) -> None:
+        """Main loop registers its phone-mic duck/pause hook here.
+
+        main.py has called this since the Mark-LIV ducking work, but the
+        setter itself was never ported into this server rewrite — the
+        AttributeError killed the whole dashboard at startup
+        ('[Dashboard] Disabled: …'), silently taking phone-audio down with
+        it. Same defensive style as set_wake_callback: hooks are optional.
+        """
+        self._phone_mic_callback = fn
+        # The ws/phone-audio handler flips this as streams open/close; main.py
+        # additionally polls phone_mic_active() from its playback loop.
+        self._phone_mic_on = False
+
+    def set_ptt_callback(self, fn) -> None:
+        """Push-to-talk toggle hook from the phone settings panel."""
+        self._ptt_callback = fn
+
+    def phone_mic_active(self) -> bool:
+        """True while the phone mic is streaming into the live session.
+
+        main.py's playback loop polls this to duck PC speakers while the
+        phone user is talking. The setter for the internal flag arrives via
+        the _phone_mic_callback; without a phone connected this is simply
+        always False (PC-only behaviour, as before ducking existed).
+        """
+        return bool(getattr(self, "_phone_mic_on", False))
 
     def set_connect_callback(self, fn) -> None:
         self._connect_callback = fn
@@ -689,6 +737,88 @@ class DashboardServer:
                     self._wake_callback()
             return JSONResponse({"ok": True})
 
+        # ── Hermes bridge intake ────────────────────────────────────────
+        # The one normalized entry point from messaging platforms into Jarvis.
+        # scripts/jarvis_inbox.py multipart-POSTs {channel, chat_id, text, file}
+        # here; we rebuild the [INBOUND channel:chat] tag that main.py's
+        # _parse_inbound splits back apart, so the reply arm can return the
+        # answer on the same channel it arrived on. Intent decisions stay in
+        # Jarvis — this layer only normalizes and enqueues.
+
+        if _UPLOAD_OK:
+            @app.post("/api/message")
+            async def api_message(
+                req: Request,
+                channel: str = FastAPIFile(None),
+                chat_id: str = FastAPIFile(None),
+                text: str = FastAPIFile(None),
+                file: UploadFile = FastAPIFile(None),
+            ):
+                if not _auth(req):
+                    return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+                channel = (channel or "telegram").strip() or "telegram"
+                chat_id = (chat_id or "").strip()
+                text = (text or "").strip()
+
+                saved = None
+                if file is not None and file.filename:
+                    safe = _safe_filename(file.filename)
+                    dest = self._uploads_dir / safe
+                    stem, suffix = Path(safe).stem, Path(safe).suffix
+                    counter = 1
+                    while dest.exists():
+                        dest = self._uploads_dir / f"{stem}_{counter}{suffix}"
+                        counter += 1
+                    size = 0
+                    try:
+                        with open(dest, "wb") as fout:
+                            while True:
+                                chunk = await file.read(65536)
+                                if not chunk:
+                                    break
+                                size += len(chunk)
+                                if size > MAX_UPLOAD_MB * 1024 * 1024:
+                                    fout.close()
+                                    dest.unlink(missing_ok=True)
+                                    return JSONResponse(
+                                        {"error": "File too large "
+                                                 f"(max {MAX_UPLOAD_MB} MB)"},
+                                        status_code=413)
+                                fout.write(chunk)
+                    except Exception as exc:
+                        try:
+                            dest.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+                        return JSONResponse({"error": str(exc)}, status_code=500)
+                    saved = str(dest)
+
+                if not text and not saved:
+                    return JSONResponse({"error": "empty message"}, status_code=400)
+
+                target = f"{channel}:{chat_id}" if chat_id else channel
+                line = f"[INBOUND {target}] {text}".rstrip()
+                if saved:
+                    line += f"\n[FILE: {saved}]"
+                await self._command_queue.put(line)
+
+                import datetime
+                asyncio.create_task(self.broadcast({
+                    "type": "log", "speaker": "user",
+                    "text": f"[{target}] {text}" if text else f"[{target}] 📎 {Path(saved).name}",
+                    "ts": datetime.datetime.now().isoformat(),
+                }))
+                if self._wake_callback:
+                    self._wake_callback()
+                return JSONResponse({"ok": True, "file": Path(saved).name if saved else None})
+        else:
+            @app.post("/api/message")
+            async def api_message_unavailable(req: Request):
+                return JSONResponse(
+                    {"error": "File uploads require: pip install python-multipart"},
+                    status_code=503)
+
         @app.post("/api/wake")
         async def wake_ep(req: Request):
             if not _auth(req):
@@ -696,6 +826,65 @@ class DashboardServer:
             if self._wake_callback:
                 self._wake_callback()
             return JSONResponse({"ok": True})
+
+        # ── News key (CurrentsAPI) ────────────────────────────────────────────
+        # The dashboard ⚙ Settings panel needs these to store the key that
+        # actions/web_search.py reads via get_news_key(). GET reports only
+        # whether a key exists plus a masked preview — the real key is never
+        # echoed back, so a stolen session can't read it out of the UI.
+
+        @app.get("/api/settings/newsapi")
+        async def newsapi_get(req: Request):
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            deps = _news_settings_deps()
+            if deps is None:
+                return JSONResponse(
+                    {"error": "News backend unavailable"}, status_code=503)
+            get_news_key, _save, mask_secret, _valid = deps
+            key = get_news_key()
+            return JSONResponse({
+                "set": bool(key),
+                "masked": mask_secret(key),
+            })
+
+        @app.post("/api/settings/newsapi")
+        async def newsapi_save(req: Request):
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            deps = _news_settings_deps()
+            if deps is None:
+                return JSONResponse(
+                    {"error": "News backend unavailable"}, status_code=503)
+            _get, save_news_key, _mask, _newsapi_key_valid = deps
+            body = await req.json()
+            key  = str(body.get("key") or "").strip()
+            if not key:
+                return JSONResponse({"ok": False, "error": "No key supplied"})
+            # Reject a key CurrentsAPI won't accept, rather than storing it and
+            # letting every later news query silently fall through to Gemini/DDG.
+            ok, msg = _newsapi_key_valid(key)
+            if not ok:
+                return JSONResponse({"ok": False, "error": msg})
+            try:
+                save_news_key(key)
+            except Exception as e:
+                return JSONResponse({"ok": False, "error": f"Could not save: {e}"})
+            return JSONResponse({"ok": True, "message": msg})
+
+        @app.post("/api/settings/newsapi/test")
+        async def newsapi_test(req: Request):
+            """Validate a key WITHOUT storing it (the TEST button)."""
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            deps = _news_settings_deps()
+            if deps is None:
+                return JSONResponse(
+                    {"error": "News backend unavailable"}, status_code=503)
+            _get, _save, _mask, _newsapi_key_valid = deps
+            body = await req.json()
+            ok, msg = _newsapi_key_valid(str(body.get("key") or ""))
+            return JSONResponse({"ok": ok, "message" if ok else "error": msg})
 
         # ── Phone mic real-time audio → Gemini Live ──────────────────────────
 
@@ -706,6 +895,12 @@ class DashboardServer:
                 await websocket.close(code=4001)
                 return
             await websocket.accept()
+            self._phone_mic_on = True          # polled by main.py (ducking)
+            if self._phone_mic_callback:
+                try:
+                    self._phone_mic_callback(True)
+                except Exception:
+                    pass
             asyncio.create_task(self.broadcast(
                 {"type": "sys", "text": "Phone microphone live."}
             ))
@@ -721,6 +916,12 @@ class DashboardServer:
             except WebSocketDisconnect:
                 pass
             finally:
+                self._phone_mic_on = False
+                if self._phone_mic_callback:
+                    try:
+                        self._phone_mic_callback(False)
+                    except Exception:
+                        pass
                 asyncio.create_task(self.broadcast(
                     {"type": "sys", "text": "Phone microphone stopped."}
                 ))

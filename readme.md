@@ -142,6 +142,51 @@ Mark LV trims it to **twelve**, and every one of them does the same kind of thin
 
 This is not only tidiness. Every bundled skill is declared to the model on **every** connection, whether you ever use it or not. The declarations sent at startup dropped from **16,827 characters to 12,907** — roughly a thousand tokens off every session, and five fewer wrong tools for the model to reach for.
 
+### 📱 Talking to it from Telegram or WhatsApp
+
+#### 🌉 The Hermes bridge
+
+The phone dashboard is Mark's own. This is different: **[Hermes](https://hermes.ai)** is a separate agent with its own install (`~/.hermes`) and its own skills, and the bridge lets the two talk in both directions.
+
+**Outbound — Mark asks Hermes for something.** `actions/hermes_task.py` shells out to `hermes -z "<task>"`, so Mark can hand a job to Hermes' full agent loop (its skills, its terminal, its browser) instead of doing it itself. `actions/hermes_skills.py` lists what Hermes can do; `actions/hermes_health.py` runs a five-probe check when the bridge seems quiet.
+
+**Inbound — Hermes hands Mark a document.** Send Mark a PDF on Telegram with a caption like *"remember this"*, and the gateway hook forwards it into the RAG library:
+
+```bash
+mkdir -p ~/.hermes/hooks/jarvis-pdf-forward
+rsync -a --delete hermes-hooks/jarvis-pdf-forward/ \
+             ~/.hermes/hooks/jarvis-pdf-forward/
+hermes gateway restart          # hooks load at gateway startup only
+```
+
+Re-run those three lines whenever you change the hook. A plain `cp -r` is *not*
+equivalent: it overwrites files that still exist in the repo but never removes
+ones that no longer do, so a deleted module — and `__pycache__/` — linger in the
+hooks dir and can be loaded instead of your fix. `rsync --delete` converges the
+install on exactly the repo contents. Keep any backup **outside**
+`~/.hermes/hooks/` (e.g. `~/.hermes/hook-backups/`): the gateway scans that whole
+tree, so a stray `HOOK.yaml` there registers a second hook and forwards every
+document twice.
+
+`hermes-hooks/jarvis-pdf-forward/` fires on the `agent:end` event and forwards **only** when the turn names a PDF that exists on disk **and** the caption shows real remember-intent — `remember`, `save this`, `add to my library`, `rag`, `ingest`, `index this`. A bare *"look at this"* deliberately does not qualify: that is the read-once path, and a permanent ingestion should never happen by accident.
+
+It then calls `scripts/jarvis_inbox.py`, the **one** normalized entry point from any messaging platform into Mark:
+
+```bash
+# document + caption (the PDF flow — what the hook does):
+scripts/jarvis_inbox.py --channel telegram --chat <chat_id> \
+    --file "/path/hermes-saved/report.pdf" --text "remember this document"
+
+# text only, e.g. from a custom Hermes skill:
+scripts/jarvis_inbox.py --channel telegram --chat <chat_id> --text "analyze NIFTY"
+```
+
+The inbox does one thing — a multipart POST to the dashboard's `/api/message`. **Mark stays the head:** intent decisions live in `core/prompt.txt` and `actions/knowledge_base.py`, never in the hook. The hook is deliberately dumb, the inbox is deliberately stateless, and the reply comes back through `hermes send` on the same channel.
+
+Two things worth knowing before you touch it. The hook is **copied** into `~/.hermes/hooks/`, not imported from the repo, so it finds this checkout via `JARVIS_HOME` or a `Mark-*` folder in your home directory — rename the project and the hook still works. And every failure inside it is swallowed and logged, because a hook must never be able to break the gateway. Watch it with `journalctl --user -u hermes-gateway -f | grep -i pdf-forward`.
+
+The full walkthrough, including the debug drill, lives in the `jarvis-hermes-bridge` skill.
+
 ### 🩹 Fixes
 * An unanswering model was retried on **every call**, at 12–15 seconds a time, because only quota and 404 failures were ever cooled down. 503/504 now rest for 30 minutes — **11.2 seconds saved per call**.
 * One-shot Gemini calls had **no timeout anywhere**, in any of the sixteen files that made them. Every call now carries a deadline of at least 10 seconds.
@@ -330,6 +375,10 @@ Mark LV/
 │   ├── weather_report.py     # Live weather data
 │   ├── video_player.py       # Plays video on the HUD, where the avatar normally is
 │   └── desktop.py            # Desktop and taskbar control
+├── hermes-hooks/             # Hermes gateway hooks — the inbound half of the Telegram/WhatsApp bridge
+│   └── jarvis-pdf-forward/   #   agent:end hook — remembers documents into the RAG library
+├── scripts/
+│   └── jarvis_inbox.py       # The one entry point from a messaging platform into Jarvis
 ├── memory/
 │   ├── memory_manager.py     # Load/save long_term.json — sessions, monitors, identity
 │   ├── config_manager.py     # api_keys.json access — key, OS, name, voice, colour, toggles

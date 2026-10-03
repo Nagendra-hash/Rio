@@ -10,13 +10,13 @@ Description=JARVIS — ngrok tunnel for TradingView alerts
 
 [Service]
 Type=exec
-WorkingDirectory=%h/Mark-LIII
-ExecStart=%h/Mark-LIII/tunnel_tv.sh
+WorkingDirectory=%h/Mark-III
+ExecStart=%h/Mark-III/tunnel_tv.sh
 # Save the (rotating) public webhook URL after start. The '-' prefix makes
 # failure NON-fatal: ngrok's handshake can outlast any sane poll window, and
 # killing a healthy tunnel over a missed URL capture would be worse than a
 # stale URL. The URL can always be re-captured with ./tunnel_url.sh --save.
-ExecStartPost=-%h/Mark-LIII/tunnel_url.sh --save
+ExecStartPost=-%h/Mark-III/tunnel_url.sh --save
 Restart=on-failure
 RestartSec=5
 # ngrok logs to stdout/journal; keep a modest ceiling

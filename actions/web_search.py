@@ -7,7 +7,7 @@ from pathlib import Path
 
 from core.gemini_retry import with_gemini_retry, in_daily_quota_cooldown
 import requests
-from memory.config_manager import get_newsapi_key
+from memory.config_manager import get_news_key
 
 def _get_base_dir() -> Path:
     import os
@@ -228,46 +228,100 @@ def _format_news(query: str, results: list[dict]) -> str:
 
 
 def _newsapi_top(query: str, max_results: int = 8) -> str:
-    """NewsAPI.org backend — live headlines via the user's own key
-    (set it in the dashboard ⚙ Settings). With a query it searches everything;
-    without one it returns top headlines — the morning-briefing case.
+    """CurrentsAPI (currentsapi.services) backend — live headlines via the
+    user's own key (set it in the dashboard ⚙ Settings). With a query it uses
+    /v1/search (keyword discovery); without one it uses /v1/latest-news — the
+    morning-briefing case.
 
     Raises on any failure; the caller falls through to Gemini/DDG.
     Deliberately NO retry decorator: this is the first-choice backend, and a
-    fast fail-through (bad key, daily quota gone) beats a slow retry."""
-    key = get_newsapi_key()
-    if not key:
-        raise RuntimeError("NewsAPI key not configured")
+    fast fail-through (bad key, daily quota gone) beats a slow retry.
 
-    if query.strip():
-        url, params = "https://newsapi.org/v2/everything", {
-            "q": query.strip(), "language": "en",
-            "sortBy": "publishedAt", "pageSize": max_results,
+    The two endpoints are NOT interchangeable: /v1/latest-news rejects
+    `keywords` with a 400, and /v1/search has no top-headlines mode. So the
+    endpoint is chosen by whether there is a query, not by preference.
+    """
+    key = get_news_key()
+    if not key:
+        raise RuntimeError("News key not configured")
+
+    q = query.strip()
+    if q:
+        url, params = "https://api.currentsapi.services/v1/search", {
+            "keywords": q, "language": "en", "page_size": max_results,
         }
     else:
-        url, params = "https://newsapi.org/v2/top-headlines", {
-            "country": "us", "pageSize": max_results,
+        url, params = "https://api.currentsapi.services/v1/latest-news", {
+            "language": "en", "page_size": max_results,
         }
-    resp = requests.get(url, params={**params, "apiKey": key}, timeout=8)
+
+    # CurrentsAPI authenticates with a Bearer header, NOT a query param — a
+    # key in the URL leaks into proxy/server logs.
+    resp = requests.get(
+        url, params=params,
+        headers={"Authorization": f"Bearer {key}"},
+        timeout=8,
+    )
     try:
         body = resp.json()
     except ValueError:
         body = {}
     if resp.status_code != 200 or body.get("status") != "ok":
-        msg = (body.get("message") or resp.text or "").strip()[:120]
-        raise RuntimeError(f"NewsAPI {resp.status_code}: {msg}")
+        msg = (body.get("message") or body.get("error") or resp.text or "").strip()[:120]
+        raise RuntimeError(f"CurrentsAPI {resp.status_code}: {msg}")
 
-    articles = [
-        {
-            "title":   a.get("title") or "",
+    # The article list lives under "news" (not "articles" as newsapi.org used).
+    # Currents folds the publisher into the title ("Headline - The Publisher"),
+    # so split it back out to keep the [source] tag meaningful.
+    articles = []
+    for a in body.get("news") or []:
+        title = (a.get("title") or "").strip()
+        if not title:
+            continue
+        bare, sep, source = title.rpartition(" - ")
+        if not sep:
+            source, bare = "", title
+        articles.append({
+            "title":   bare,
             "snippet": (a.get("description") or "")[:140],
             "url":     a.get("url") or "",
-            "source":  (a.get("source") or {}).get("name", ""),
-        }
-        for a in body.get("articles", [])
-    ]
-    articles = [a for a in articles if a["title"]]
-    return _format_news(query.strip() or "top stories", articles)
+            "source":  source or (a.get("author") or ""),
+        })
+    return _format_news(q or "top stories", articles)
+
+
+def _newsapi_key_valid(key: str) -> tuple[bool, str]:
+    """Probe a CurrentsAPI key with a 1-article request.
+
+    Returns (ok, message). Used by the dashboard TEST button so a bad key is
+    caught at save time instead of silently falling through to Gemini/DDG on
+    every later news query.
+    """
+    key = (key or "").strip()
+    if not key:
+        return False, "No key supplied"
+    try:
+        resp = requests.get(
+            "https://api.currentsapi.services/v1/latest-news",
+            params={"language": "en", "page_size": 1},
+            headers={"Authorization": f"Bearer {key}"},
+            timeout=8,
+        )
+        try:
+            body = resp.json()
+        except ValueError:
+            body = {}
+    except requests.RequestException as e:
+        return False, f"Could not reach CurrentsAPI: {e}"
+
+    if resp.status_code == 200 and body.get("status") == "ok":
+        return True, "Key accepted by CurrentsAPI ✓"
+    if resp.status_code in (401, 403):
+        return False, "Key rejected by CurrentsAPI (401/403)"
+    if resp.status_code == 429:
+        return False, "Daily quota exhausted (250/day on the free tier)"
+    msg = (body.get("message") or body.get("error") or resp.text or "").strip()[:120]
+    return False, f"CurrentsAPI {resp.status_code}: {msg}"
 
 
 # ── Briefing helper ────────────────────────────────────────────────────────────
@@ -328,24 +382,24 @@ def _search(query: str) -> str:
 
 def _news(query: str) -> str:
     """
-    News with a three-backend chain: NewsAPI (user key, dashboard ⚙) →
-    Gemini grounded search → DDG news. NewsAPI gets a short grace window to
+    News with a three-backend chain: CurrentsAPI (user key, dashboard ⚙) →
+    Gemini grounded search → DDG news. CurrentsAPI gets a short grace window to
     answer first (highest-quality backend); the Gemini/DDG race is unchanged
     behind it.
     """
     import threading
 
-    # ── Backend 0: NewsAPI — short grace, fast fail-through ─────────────
+    # ── Backend 0: CurrentsAPI — short grace, fast fail-through ─────────
     napi_box = [None]           # late result may still land (see the end)
     napi_thread = None
-    if get_newsapi_key():
+    if get_news_key():
         napi_evt = threading.Event()
 
         def _try_newsapi():
             try:
                 napi_box[0] = _newsapi_top(query)
             except Exception as e:
-                print(f"[WebSearch] ⚠️ NewsAPI failed ({e})")
+                print(f"[WebSearch] ⚠️ CurrentsAPI failed ({e})")
             finally:
                 napi_evt.set()
 
@@ -493,7 +547,10 @@ def web_search(
     items  = params.get("items", [])
     aspect = params.get("aspect", "general").strip() or "general"
 
-    if not query and not items:
+    # A query-less news call is legitimate — "what's in the news?" / the morning
+    # briefing — and the backend serves it from the top-headlines endpoint. Every
+    # other mode needs something to search for.
+    if not query and not items and mode != "news":
         return "Please provide a search query."
 
     if items and mode not in ("compare",):

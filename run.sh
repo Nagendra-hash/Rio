@@ -13,8 +13,20 @@ set -euo pipefail
 
 # Always run from the project root, no matter where the script was invoked from
 cd "$(dirname "$(readlink -f "$0")")"
+ROOT="$PWD"
 
-PY=".venv/bin/python"
+PY="$ROOT/.venv/bin/python"
+
+# Heal a venv that was moved/renamed with the project: pip and `activate` bake
+# the absolute interpreter path into every console script and into VIRTUAL_ENV,
+# so a stale prefix leaves `python` unresolvable on PATH. Repoint it in place.
+if [ -f .venv/pyvenv.cfg ] && grep -q "home = " .venv/pyvenv.cfg; then
+    STALE="$(grep -o "/home/[^/]*/Mark-[^/]*" .venv/bin/activate 2>/dev/null | head -1 || true)"
+    if [ -n "$STALE" ] && [ "$STALE" != "$ROOT" ]; then
+        echo "[run.sh] Repairing venv paths ($STALE → $ROOT)…"
+        grep -rl "$STALE/" .venv/bin/ 2>/dev/null | xargs -r sed -i "s#$STALE/#$ROOT/#g"
+    fi
+fi
 
 # Bootstrap: create the venv and install dependencies if it does not exist yet
 if [ ! -x "$PY" ]; then
@@ -31,9 +43,13 @@ if [ "$(printf '%s\n3.11\n' "$VVER" | sort -V | head -1)" != "3.11" ]; then
     echo "[run.sh] ⚠️  venv Python is $VVER (3.11+ recommended; falling back to main.py's compat shim)"
 fi
 
-# Activate so child processes (installers, spawned tools) inherit venv PATH
+# Activate so child processes (installers, spawned tools) inherit venv PATH.
+# `python` is resolved through the absolute $PY below, so a stale activate
+# script can no longer break startup.
 # shellcheck disable=SC1091
 source .venv/bin/activate
+export VIRTUAL_ENV="$ROOT/.venv"
+export PATH="$ROOT/.venv/bin:$PATH"
 
 # Line-buffered stdout: when output is redirected to /tmp/jarvis_live.log,
 # Python block-buffers and status lines appear minutes late (or not at all
@@ -58,6 +74,6 @@ fi
 # Publish the pid for zombie_watch.sh (it samples /tmp/jarvis.pid + /tmp/jarvis_live.log).
 # After `exec` the shell IS the python process, so $$ is the app's pid.
 echo $$ > /tmp/jarvis.pid
-echo "[run.sh] Starting JARVIS (venv Python $(python --version 2>&1 | cut -d' ' -f2)) — pid $(cat /tmp/jarvis.pid)"
+echo "[run.sh] Starting JARVIS (venv Python $("$PY" --version 2>&1 | cut -d' ' -f2)) — pid $(cat /tmp/jarvis.pid)"
 
-exec python main.py "$@"
+exec "$PY" main.py "$@"

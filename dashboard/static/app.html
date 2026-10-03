@@ -377,17 +377,17 @@
     <div id="settings-panel">
       <div class="set-title">⚙ Settings</div>
       <div class="set-group">
-        <div class="set-lbl">NewsAPI key (newsapi.org)</div>
+        <div class="set-lbl">News API key (currentsapi.services)</div>
         <div class="set-row">
-          <input id="newsapi-input" class="set-input" placeholder="Paste your NewsAPI key…" autocomplete="off">
+          <input id="newsapi-input" class="set-input" placeholder="Paste your CurrentsAPI key…" autocomplete="off">
           <button class="set-btn ghost" onclick="testNewsKey()" id="newsapi-test">TEST</button>
           <button class="set-btn primary" onclick="saveNewsKey()" id="newsapi-save">SAVE</button>
         </div>
         <div id="newsapi-status" class="set-status"></div>
         <div class="set-hint">
-          Optional — live news headlines from <a href="https://newsapi.org/register" target="_blank" rel="noopener">newsapi.org</a>.
-          Free tier: 100 requests/day. When set, JARVIS uses it first for news;
-          without it, Gemini & DuckDuckGo handle news as before.
+          Optional — live news headlines from <a href="https://currentsapi.services/en/register" target="_blank" rel="noopener">CurrentsAPI</a>.
+          Free tier: 250 requests/day. When set, JARVIS uses it first for news;
+          without it, Gemini &amp; DuckDuckGo handle news as before.
         </div>
       </div>
       <div class="set-group">
@@ -1387,7 +1387,7 @@
       const st  = document.getElementById('newsapi-status');
       const key = inp.value.trim();
       if (!key) { _setStatus(st, 'Paste a key first (or leave empty to keep the saved one)', ''); return; }
-      _setStatus(st, 'Saving…', '');
+      _setStatus(st, 'Checking key…', '');
       _authFetch('/api/settings/newsapi', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ key })
@@ -1396,9 +1396,13 @@
         .then(d => {
           if (d.ok) {
             inp.value = '';
-            inp.placeholder = key.slice(0, 8) + '…' + key.slice(-4);
+            // Show the server's masked form, not a slice of the pasted key.
+            _authFetch('/api/settings/newsapi')
+              .then(x => x.json())
+              .then(s => { if (s.masked) inp.placeholder = s.masked; })
+              .catch(() => {});
             _setStatus(st, 'Saved ✓', 'ok');
-            toast('NewsAPI key saved');
+            toast('News API key saved');
           } else { _setStatus(st, d.error || 'Save failed', 'err'); }
         })
         .catch(() => _setStatus(st, 'Network error', 'err'));

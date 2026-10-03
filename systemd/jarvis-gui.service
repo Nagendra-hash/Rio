@@ -16,8 +16,8 @@ PartOf=graphical-session.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/Mark-LIII
-ExecStart=%h/Mark-LIII/jarvis_gui_wrapper.sh
+WorkingDirectory=%h/Mark-III
+ExecStart=%h/Mark-III/jarvis_gui_wrapper.sh
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal

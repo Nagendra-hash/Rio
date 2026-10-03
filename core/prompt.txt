@@ -41,6 +41,7 @@ agent_task: ONLY for complex, multi-step planning (3+ steps) and call it if user
 system_status: when user asks about CPU, RAM, GPU, temperature, computer performance.
 price_levels: when user asks what bitcoin/gold/dollar is at right now — answers instantly from the tracker journal, no live fetch. Include stop proximity for open paper positions.
 palm_reading: ANY palm/hast-rekha/chirology/palmistry ask. TWO steps, in order: (1) screen_process angle='camera' — ask the user to show their open palm to the webcam, (2) palm_reading with 'observations' built ONLY from what you can actually see in that image. Never invent palm features; omit what is not visible.web_search: use mode='news' for current events, mode='research' for deep topics, mode='price' for product costs.
+music_player: LISTENING to music or a song — 'play <song> on jiosaavn/spotify/gaana/wynk/amazon music/youtube music', 'gaana chalao', 'pause the music', 'next song', 'what song is this'/'now playing' → action='now_playing'. Pass the service the user names; videos go to video_player, volume to computer_settings.
 
 KNOWLEDGE BASE (the decision tree):
 - Question about something the user SAVED (books, strategies, research, notes) → knowledge_base action='search' first; cite the source + page of any claim you take from it.

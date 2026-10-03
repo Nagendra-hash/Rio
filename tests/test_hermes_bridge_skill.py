@@ -40,8 +40,18 @@ def test_skill_documents_the_three_bridge_pieces():
     for ref in ("actions/hermes_task.py", "scripts/jarvis_inbox.py",
                 "hermes-hooks/jarvis-pdf-forward"):
         assert ref in text, f"skill must reference {ref}"
-    # install instructions and the debug drill must be present
-    assert "cp -r hermes-hooks/jarvis-pdf-forward ~/.hermes/hooks/" in text
+    # install instructions and the debug drill must be present.
+    # The install must be rsync --delete into an explicit dir: a plain
+    # `cp -r src ~/.hermes/hooks/` overwrites files that still exist in the
+    # repo but never removes ones that no longer do, so a deleted module (and
+    # __pycache__/) lingers in the hooks dir and can be loaded instead of the
+    # fix. Assert the correct command is what a reader would copy.
+    assert "rsync -a --delete hermes-hooks/jarvis-pdf-forward/" in text
+    assert "mkdir -p ~/.hermes/hooks/jarvis-pdf-forward" in text
+    # ...and that the cp -r trap is called out, so nobody "simplifies" back to it
+    assert "cp -r hermes-hooks/jarvis-pdf-forward" in text
+    # backups must not live where the gateway scans for HOOK.yaml
+    assert "hook-backups" in text
     assert "knowledge/audit.log" in text
 
 

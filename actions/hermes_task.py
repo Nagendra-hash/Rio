@@ -18,10 +18,23 @@ in an executor thread, but the user is still waiting for speech back.
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
+from pathlib import Path
 
-_HERMES = shutil.which("hermes") or "/home/nagendra/.local/bin/hermes"
+_HOME = Path.home()
+_HERMES = shutil.which("hermes") or str(_HOME / ".local" / "bin" / "hermes")
+# Fixed, minimal env: the GUI process must never hand Hermes its own
+# environment. PATH still has to reach the CLI and Hermes' bundled node.
+_ENV = {
+    "PATH": os.pathsep.join([
+        str(_HOME / ".local" / "bin"),
+        str(_HOME / ".hermes" / "node" / "bin"),
+        "/usr/local/bin", "/usr/bin", "/bin",
+    ]),
+    "HOME": str(_HOME),
+}
 _TIMEOUT_TASK = 240   # seconds for a full agent turn
 
 
@@ -29,9 +42,7 @@ def _run_hermes(args: list[str], timeout: int) -> tuple[int, str]:
     try:
         proc = subprocess.run(
             [_HERMES, *args],
-            capture_output=True, text=True, timeout=timeout,
-            env={"PATH": "/home/nagendra/.local/bin:/home/nagendra/.hermes/node/bin:/usr/local/bin:/usr/bin:/bin",
-                 "HOME": "/home/nagendra"},
+            capture_output=True, text=True, timeout=timeout, env=_ENV,
         )
         return proc.returncode, (proc.stdout or "").strip()
     except FileNotFoundError:

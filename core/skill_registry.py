@@ -34,7 +34,13 @@ SKILLS_DIR = BASE_DIR / "skills"
 REGISTRY_PATH = SKILLS_DIR / "installed_skills.json"
 
 MAX_SKILL_BYTES = 100 * 1024 * 1024      # 100 MB payload cap
-CONTEXT_MAX_CHARS = 4500                 # prompt-injection budget, all skills
+# Prompt-injection budget, shared by ALL enabled skills. At the old 4500 the
+# sixth installed skill was silently dropped ("truncated — too many installed
+# skills"), because every skill draws from this one pool in alphabetical
+# order. 12000 holds the current six skills at CONTEXT_PER_SKILL each with
+# room to spare. Keep it proportional to how many skills are actually
+# installed — every char here is paid on EVERY session rebuild.
+CONTEXT_MAX_CHARS = 12000                # prompt-injection budget, all skills
 CONTEXT_PER_SKILL = 1600                 # per-skill excerpt budget
 
 _NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$")

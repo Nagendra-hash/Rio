@@ -168,12 +168,22 @@ _OLLAMA_URL = "http://127.0.0.1:11434/v1/chat/completions"
 _OLLAMA_TAGS_URL = "http://127.0.0.1:11434/api/tags"
 
 # ── Local rung (the plan's LOCAL WORKHORSE) ──────────────────────────────────
-# Ollama first: it runs as a service, stays warm (~1.7 s a turn) and keeps no
+# Ollama first: it runs as a service, answers a warm turn in ~1.7 s and keeps no
 # RAM the rest of the app doesn't already know about. The 3B coder GGUF
 # (core/llm_local.py) is the second local engine — better at code, but a cold
 # load costs ~30 s and ~2 GB RAM, so it only fires when Ollama can't.
+#
+# keep_alive is what makes "warm" true. Ollama's default is to unload a model
+# 5 minutes after its last call, so an idle JARVIS pays the full load again on
+# the next reply: measured 31-65 s cold vs 0.5-1.7 s resident, and on a 60 s
+# client timeout the cold case tipped over into the 3B fallback (the 411-422 s
+# outliers in memory/llm_usage.jsonl). -1 pins the model in RAM until the
+# service restarts — ~1.2 GB for qwen2.5:1.5b, which is the point of the local
+# rung. Set OLLAMA_KEEP_ALIVE_MINUTES to trade some of that RAM back for a
+# bounded residency.
 _OLLAMA_DEFAULT_MODELS = ["qwen2.5:1.5b"]
 _OLLAMA_TIMEOUT_S = 60        # CPU-only inference; long enough for a cold load
+_OLLAMA_KEEP_ALIVE = os.environ.get("OLLAMA_KEEP_ALIVE_MINUTES", "").strip()
 _OLLAMA_PROBE_TTL_OK = 60     # re-probe a healthy Ollama at most once a minute
 _OLLAMA_PROBE_TTL_FAIL = 120  # a dead one is not retried more often than this
 
@@ -508,10 +518,16 @@ class _KeyDead(Exception):
 
 def _call_openrouter(api_key: str, models: list[str], messages: list[dict],
                      timeout: int = 60, url: str = _OR_URL,
-                     max_tokens: int | None = None) -> tuple[str, str, dict | None]:
+                     max_tokens: int | None = None,
+                     keep_alive: int | str | None = None,
+                     ) -> tuple[str, str, dict | None]:
     """OpenAI-compatible chat-completions caller — used for OpenRouter, Grok
     (api.x.ai), OpenAI (api.openai.com), FreeLLMAPI and Ollama alike; the wire
-    format is identical. Returns (text, model, usage-or-None)."""
+    format is identical. Returns (text, model, usage-or-None).
+
+    `keep_alive` is passed only by the Ollama rung, which needs the model to
+    stay resident between turns; the cloud providers never set it.
+    """
     import requests
 
     last_err = "no attempt made"
@@ -519,6 +535,8 @@ def _call_openrouter(api_key: str, models: list[str], messages: list[dict],
         payload: dict = {"model": model, "messages": messages}
         if max_tokens:
             payload["max_tokens"] = max_tokens
+        if keep_alive is not None:
+            payload["keep_alive"] = keep_alive
         try:
             r = requests.post(
                 url,
@@ -782,15 +800,27 @@ def _plan_chain(mode: str, task: str, long_prompt: bool, *,
 
 # ── The provider steps ───────────────────────────────────────────────────────
 
+def _ollama_keep_alive() -> int | str:
+    """Residency asked of Ollama on every local call. -1 = until restart;
+    a configured N pins it for N minutes instead of the 5-minute default."""
+    if _OLLAMA_KEEP_ALIVE:
+        try:
+            return max(1, int(_OLLAMA_KEEP_ALIVE)) * 60
+        except ValueError:
+            pass
+    return -1
+
+
 def _step_ollama(full_cfg: dict, message: dict, system: str, task: str):
     models = full_cfg.get("ollama_models") or _OLLAMA_DEFAULT_MODELS
     ok, reason = _ollama_alive(models[0])
     if not ok:
         raise _Skip(f"ollama {reason}")
     messages = _build_messages(message, system)
+    keep_alive = _ollama_keep_alive()
     text, mdl, usage = _call_openrouter(
         "ollama", models, messages, url=_OLLAMA_URL, timeout=_OLLAMA_TIMEOUT_S,
-        max_tokens=700 if task == "code" else 350)
+        max_tokens=700 if task == "code" else 350, keep_alive=keep_alive)
     if task == "code" and not _code_ok(text):
         # The plan's code loop: generate → local validation → one corrective
         # retry with the local model → only then escalate to the cloud.
@@ -804,7 +834,7 @@ def _step_ollama(full_cfg: dict, message: dict, system: str, task: str):
         try:
             text2, mdl2, usage2 = _call_openrouter(
                 "ollama", models, retry_msgs, url=_OLLAMA_URL,
-                timeout=_OLLAMA_TIMEOUT_S, max_tokens=700)
+                timeout=_OLLAMA_TIMEOUT_S, max_tokens=700, keep_alive=keep_alive)
             if text2 and _code_ok(text2):
                 return text2, f"{mdl2}+fix", usage2
         except Exception:
@@ -992,7 +1022,8 @@ def local_generate(prompt: str, system: str = "") -> tuple[str, str]:
                     + [{"role": "user", "content": prompt}]
                 text, mdl, _u = _call_openrouter(
                     "ollama", models, messages, url=_OLLAMA_URL,
-                    timeout=_OLLAMA_TIMEOUT_S, max_tokens=350)
+                    timeout=_OLLAMA_TIMEOUT_S, max_tokens=350,
+                    keep_alive=_ollama_keep_alive())
                 if text:
                     return text, f"ollama:{mdl}"
             except Exception as e:

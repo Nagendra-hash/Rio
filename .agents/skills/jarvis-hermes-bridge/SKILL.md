@@ -1,7 +1,7 @@
 ---
 name: jarvis-hermes-bridge
 description: >
-  Operate and extend the two-way JARVIS (Mark-LIII) ↔ Hermes Agent bridge —
+  Operate and extend the two-way JARVIS (Mark LV) ↔ Hermes Agent bridge —
   the messaging + scheduling layer that lets Telegram/WhatsApp users talk to
   JARVIS through Hermes, lets JARVIS delegate tasks to Hermes' full agent
   loop, and forwards remember-intent documents into JARVIS's RAG library.
@@ -44,10 +44,31 @@ and the inbox script is deliberately stateless.
 ## 1. Install / reinstall the hook
 
 ```bash
-cp -r hermes-hooks/jarvis-pdf-forward ~/.hermes/hooks/
+# mkdir first: rsync will not create a missing hooks dir, and --delete on a
+# fresh install has nothing to remove.
+mkdir -p ~/.hermes/hooks/jarvis-pdf-forward
+rsync -a --delete hermes-hooks/jarvis-pdf-forward/ \
+             ~/.hermes/hooks/jarvis-pdf-forward/
 hermes gateway restart          # hooks load at gateway startup only
 journalctl --user -u hermes-gateway -f | grep -i pdf-forward
 ```
+
+**Re-run this, do not `cp -r` it.** `cp -r hermes-hooks/jarvis-pdf-forward
+~/.hermes/hooks/` looks equivalent and is not: it overwrites files that still
+exist in the repo but leaves behind any that no longer do, so a module you
+deleted — and `__pycache__/` — survive in the hooks dir and can be loaded
+instead of your fix. `rsync --delete` converges the install on exactly the repo
+contents and is safe to repeat.
+
+Two related traps in the same directory:
+
+- **Never leave a backup inside `~/.hermes/hooks/`.** The gateway scans that
+  whole tree for `HOOK.yaml`, so a `jarvis-pdf-forward.bak-*` copy registers as
+  a *second* hook and every document gets forwarded twice. Keep backups in
+  `~/.hermes/hook-backups/`.
+- **Keep only one install.** The gateway logs
+  `[hooks] Loaded hook 'jarvis-pdf-forward'` once per registered hook — two
+  lines means you have a duplicate somewhere, not a normal double-registration.
 
 Directory hooks in `~/.hermes/hooks/` are trusted code — no consent allowlist
 dance (that only applies to shell hooks). The hook fires on `agent:end` (NOT
@@ -59,10 +80,14 @@ when **both** are true:
    `add to my library`, `rag`, `ingest`, `index this` — intentionally
    conservative; a bare "look at this" must stay the read-once path).
 
-It then runs `scripts/jarvis_inbox.py` with a fixed env
-(`HOME=/home/nagendra`, minimal PATH) — edit `_JARVIS_ENV` in the handler when
-the username changes. Every failure is swallowed and logged; a hook must never
-break the gateway.
+It then runs `scripts/jarvis_inbox.py` with a fixed env (minimal `PATH`, `HOME`
+from `Path.home()`). This hook is COPIED into `~/.hermes/hooks/`, so it is not
+imported from the repo and `__file__` does not point at the checkout — it finds
+this repo via `_find_inbox()`, which tries `JARVIS_HOME`, then the source tree,
+then a `Mark-*` directory in `$HOME`, accepting a candidate only if
+`scripts/jarvis_inbox.py` is actually in it. So renaming or moving the checkout
+does not break the hook, and no path needs editing when the username changes.
+Every failure is swallowed and logged; a hook must never break the gateway.
 
 ## 2. The inbox entry point
 
@@ -100,11 +125,13 @@ automatically by `core/action_loader.py`):
 
 Conventions all three share — keep them in any new bridge action:
 
-- Locate the CLI with `shutil.which("hermes") or "/home/nagendra/.local/bin/hermes"`.
+- Locate the CLI with `shutil.which("hermes") or str(Path.home() / ".local" / "bin" / "hermes")`.
 - Run subprocesses with `capture_output=True, text=True`, a hard timeout, and
   a fixed env (`PATH` includes `~/.local/bin` and `~/.hermes/node/bin`,
-  `HOME=/home/nagendra`) — the GUI process must never hang its audio loop and
-  never inherits a hostile environment.
+  `HOME=Path.home()`) — the GUI process must never hang its audio loop and
+  never inherits a hostile environment. Build the `PATH` with `os.pathsep.join`
+  and derive every component from `Path.home()`: **never hardcode a username or
+  an absolute home path**, or the bridge breaks for every account but one.
 - Timeouts map to exit `124`; missing CLI to `127`; both get friendly text.
 - No new pip dependencies — stdlib only.
 

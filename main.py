@@ -2889,19 +2889,97 @@ class JarvisLive:
             body = (body[:fm.start()] + body[fm.end():]).strip()
         return channel, body, file_path
 
+    # Telegram bot credentials from ~/.hermes/.env, resolved once and cached.
+    # The reply arm used to shell out to `hermes send` for every answer, which
+    # pays ~3.3s of interpreter startup before a single byte leaves the box and
+    # measured 6.5-17s per reply; the bot API does the same POST in ~1.5s.
+    # Cached because a reply must never block on re-reading a file, and these
+    # values rotate on the order of days. `None` until the first lookup.
+    _tg_creds: tuple[str, str] | None = None
+
+    @classmethod
+    def _telegram_creds(cls) -> tuple[str, str] | None:
+        """(bot_token, chat_id) read from Hermes' env file, else None.
+
+        Same two variables `hermes send` and the curl fallback in
+        scripts/local_model_report.sh use. Returns None for any failure, which
+        just routes the reply back through the CLI.
+        """
+        if cls._tg_creds is not None:
+            return cls._tg_creds
+        try:
+            vals: dict[str, str] = {}
+            for line in (Path.home() / ".hermes" / ".env").read_text(
+                    encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                vals[k.strip()] = v.strip().strip('"').strip("'")
+            token = vals.get("TELEGRAM_BOT_TOKEN", "")
+            chat = (vals.get("TELEGRAM_CHAT_ID")
+                    or vals.get("TELEGRAM_HOME_CHANNEL") or "")
+            if not token or not chat:
+                return None
+        except Exception:
+            return None
+        cls._tg_creds = (token, chat)
+        return cls._tg_creds
+
+    @staticmethod
+    def _telegram_direct(token: str, chat_id: str, text: str) -> bool:
+        """One sendMessage POST. True on HTTP 200, False on anything else."""
+        import urllib.request as _req
+        import urllib.parse as _parse
+        body = _parse.urlencode({"chat_id": chat_id, "text": text}).encode()
+        req = _req.Request(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data=body, method="POST",
+            headers={"Content-Type": "application/x-www-form-urlencoded"})
+        try:
+            with _req.urlopen(req, timeout=15) as resp:
+                return resp.status == 200
+        except Exception as e:
+            print(f"[Hermes] ⚠️ direct telegram send failed: {e}")
+            return False
+
     def _hermes_send(self, text: str, target: str,
                      attach: str | None = None) -> bool:
-        """Fire-and-forget delivery through the Hermes CLI. Safe to call from
-        any thread; never raises. Returns True when Hermes reported success."""
+        """Fire-and-forget delivery. Safe to call from any thread; never raises.
+        Returns True when the platform confirmed the message.
+
+        Telegram goes straight to the bot API — the same request `hermes send`
+        makes, minus the per-reply process startup that dominated reply latency.
+        Anything else (WhatsApp, thread-scoped targets, missing creds) falls
+        through to the CLI, which stays the single source of truth for routing.
+        """
         import subprocess as _sp
+        import os as _os
+        from pathlib import Path as _Path
+
+        body = text[:3500]
+        parts = target.split(":")
+        # platform:chat_id:thread_id keeps its thread only via the CLI, so it is
+        # not eligible for the fast path.
+        if not attach and parts[0] == "telegram" and len(parts) <= 2:
+            creds = self._telegram_creds()
+            if creds:
+                token, home_chat = creds
+                chat = parts[1] if len(parts) == 2 and parts[1] else home_chat
+                if self._telegram_direct(token, chat, body):
+                    return True
+                print("[Hermes] falling back to CLI delivery")
+
         try:
-            args = ["hermes", "send", "-t", target, text[:3500]]
+            args = ["hermes", "send", "-t", target, body]
             if attach:
                 args += ["-f", attach]
             proc = _sp.run(
                 args, capture_output=True, text=True, timeout=30,
-                env={"PATH": "/home/nagendra/.local/bin:/usr/local/bin:/usr/bin:/bin",
-                     "HOME": "/home/nagendra"})
+                env={"PATH": _os.pathsep.join([
+                         str(_Path.home() / ".local" / "bin"),
+                         "/usr/local/bin", "/usr/bin", "/bin"]),
+                     "HOME": str(_Path.home())})
             ok = proc.returncode == 0 and "sent" in (proc.stdout or "").lower()
             if not ok:
                 print(f"[Hermes] ⚠️ send to {target} failed: "

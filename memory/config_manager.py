@@ -81,17 +81,23 @@ def save_assistant_config(assistant_name: str, user_name: str) -> None:
     CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
 
 
-# ── NewsAPI key ──────────────────────────────────────────────────────────────
-# Optional: newsapi.org free-tier key for the news backend in web_search.py.
-# Empty/absent = feature off and the search chain falls through to DDG.
+# ── News key ─────────────────────────────────────────────────────────────────
+# Optional: currentsapi.services free-tier key for the news backend in
+# web_search.py. Empty/absent = feature off and the news chain falls through
+# to Gemini grounded search and then DDG.
+#
+# The key is read through this one accessor everywhere. Callers that still hold
+# a legacy newsapi.org key (stored under the old "newsapi_key" field) keep
+# working: the new field wins when set, the old one is the fallback.
 
-def get_newsapi_key() -> str:
-    """Return the stored NewsAPI key ('' when not configured)."""
-    return (load_api_keys().get("newsapi_key") or "").strip()
+def get_news_key() -> str:
+    """Return the stored CurrentsAPI key ('' when not configured)."""
+    keys = load_api_keys()
+    return (keys.get("currents_api_key") or keys.get("newsapi_key") or "").strip()
 
 
-def save_newsapi_key(key: str) -> None:
-    """Persist (or clear, with '') the NewsAPI key."""
+def save_news_key(key: str) -> None:
+    """Persist (or clear, with '') the CurrentsAPI key."""
     ensure_config_dir()
     data: dict = {}
     if CONFIG_FILE.exists():
@@ -99,8 +105,22 @@ def save_newsapi_key(key: str) -> None:
             data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
         except Exception:
             data = {}
-    data["newsapi_key"] = (key or "").strip()
+    data["currents_api_key"] = (key or "").strip()
     CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
+
+
+def mask_secret(secret: str) -> str:
+    """Length-masked preview for the settings UI — never echo a real secret.
+
+    Short secrets are masked more aggressively (a 4-char token would otherwise
+    leak almost entirely), and anything too short to mask safely shows nothing.
+    """
+    secret = (secret or "").strip()
+    if not secret:
+        return ""
+    if len(secret) < 12:
+        return f"{secret[:1]}•••" if len(secret) >= 4 else "•••"
+    return f"{secret[:6]}…{secret[-4:]}"
 
 
 # ── Dashboard static token ───────────────────────────────────────────────────

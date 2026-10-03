@@ -2956,6 +2956,7 @@ class MainWindow(QMainWindow):
     _wake_btns_sig   = pyqtSignal()          # wake state resolved off-thread
     _video_close_sig = pyqtSignal()
     _video_mute_sig  = pyqtSignal(bool)
+    _video_pause_sig = pyqtSignal(bool)      # True=hold, False=resume (music)
     _clipboard_sig  = pyqtSignal(str)        # clipboard text changed (thread-safe)
     _confirm_sig    = pyqtSignal(str, str)   # (title, detail) — irreversible-action gate
     _confirm_hide_sig = pyqtSignal()
@@ -3241,6 +3242,7 @@ class MainWindow(QMainWindow):
         self._video_open_sig.connect(self._on_video_open)
         self._video_close_sig.connect(self._on_video_close)
         self._video_mute_sig.connect(self._on_video_mute)
+        self._video_pause_sig.connect(self._on_video_pause)
         self._clipboard_sig.connect(self._show_clipboard_panel)
         self._wake_dl_sig.connect(self._on_wake_install_done)
         self._quiz_sig.connect(self._show_quiz)
@@ -3420,6 +3422,27 @@ class MainWindow(QMainWindow):
 
     def _on_video_mute(self, muted: bool) -> None:
         self._set_video_muted(muted)
+
+    def _set_video_paused(self, paused: bool) -> None:
+        """Hold or resume whatever is playing — music's pause button.
+
+        Both players get the call: whichever one carries the sound obeys, and
+        the other ignores it. Resuming touches only PAUSED players, so a fresh
+        source that has not started buffering is not yanked into playing.
+        """
+        for p in (self._video_player, self._video_sound):
+            if not p:
+                continue
+            try:
+                if paused:
+                    p.pause()
+                elif p.playbackState() == QMediaPlayer.PlaybackState.PausedState:
+                    p.play()
+            except Exception:
+                pass
+
+    def _on_video_pause(self, paused: bool) -> None:
+        self._set_video_paused(paused)
 
     def _sync_mic_for_video(self) -> None:
         """Close the microphone while the video is making sound.
@@ -5830,6 +5853,10 @@ class JarvisUI:
     def set_video_muted(self, muted: bool) -> None:
         """Thread-safe: silence or unsilence whatever is playing."""
         self._win._video_mute_sig.emit(bool(muted))
+
+    def pause_video(self, paused: bool) -> None:
+        """Thread-safe: hold or resume whatever is playing (music controls)."""
+        self._win._video_pause_sig.emit(bool(paused))
 
     def video_is_playing(self) -> bool:
         return bool(self._win.video_is_playing())

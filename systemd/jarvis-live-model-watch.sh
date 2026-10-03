@@ -40,7 +40,7 @@
 #   JARVIS_LMW_INCIDENT_ID   incident id stamped on records (default live-20260930-3.1)
 # ─────────────────────────────────────────────────────────────────────────────
 
-CONFIG="${JARVIS_LMW_CONFIG:-$HOME/Mark-LIII/config/api_keys.json}"
+CONFIG="${JARVIS_LMW_CONFIG:-$HOME/Mark-III/config/api_keys.json}"
 CANDIDATE="${JARVIS_LMW_CANDIDATE:-models/gemini-3.1-flash-live-preview}"
 STATE_FILE="${JARVIS_LMW_STATE_FILE:-/tmp/jarvis_live_model_watch.state}"
 LOG="${JARVIS_LMW_LOG:-/tmp/jarvis_live_model_watch.log}"
@@ -49,9 +49,9 @@ LOG="${JARVIS_LMW_LOG:-/tmp/jarvis_live_model_watch.log}"
 # incident's full history survives /tmp cleanups and can be replayed later.
 # Dash-only default (not :-): an explicitly EMPTY value must disable incident
 # logging (opt-out), not fall back to the default path.
-INCIDENTS="${JARVIS_LMW_INCIDENTS-$HOME/Mark-LIII/memory/incidents.jsonl}"
+INCIDENTS="${JARVIS_LMW_INCIDENTS-$HOME/Mark-III/memory/incidents.jsonl}"
 INCIDENT_ID="${JARVIS_LMW_INCIDENT_ID:-live-20260930-3.1}"
-PROBE="${JARVIS_LMW_PROBE:-$HOME/Mark-LIII/.venv/bin/python $HOME/Mark-LIII/scripts/diag_live_speech_health.py}"
+PROBE="${JARVIS_LMW_PROBE:-$HOME/Mark-III/.venv/bin/python $HOME/Mark-III/scripts/diag_live_speech_health.py}"
 SYSCTL="${JARVIS_LMW_SYSTEMCTL:-systemctl}"
 RECOVERY_HITS="${JARVIS_LMW_RECOVERY_HITS:-2}"
 NOTIFY="${JARVIS_LMW_NOTIFY:-1}"
