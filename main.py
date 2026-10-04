@@ -316,6 +316,7 @@ from actions.background_monitor import (
 )
 from actions.camera_watch       import CameraWatcher
 from actions.web_search        import _news as _fetch_news_sync
+from actions._google_auth      import briefing_context as _fetch_day_ahead
 from memory.config_manager import (
     get_brief_enabled, get_voice, get_wake_word_enabled, save_wake_word_enabled,    get_input_device, get_output_device,
     get_push_to_talk_enabled, get_thinking_enabled,
@@ -2387,10 +2388,15 @@ class JarvisLive:
         """
         Two-phase briefing optimized for speed:
           Phase 1 — instant greeting (no tools) → speech starts in <1s
-          Phase 2 — news pre-fetched in a background thread while Phase 1 plays,
-                    delivered as ready text (no Gemini tool-call round-trip) and
-                    shown on the UI content panel. Waits for turn_complete event
-                    instead of a fixed sleep so there is no unnecessary gap.
+          Phase 2 — news (opt-in) and the day-ahead snapshot (tomorrow's
+                    calendar events + unread mail count) pre-fetch in
+                    background threads while Phase 1 plays, delivered as ready
+                    text (no Gemini tool-call round-trip) and shown on the UI
+                    content panel. Waits for turn_complete event instead of a
+                    fixed sleep so there is no unnecessary gap. The day-ahead
+                    fetch is consent-free: with Google connected it is two API
+                    calls, without it it resolves to "" and Phase 2 stays
+                    quiet — a briefing must never open a login tab.
         """
         memory   = load_memory()
         identity = memory.get("identity", {})
@@ -2415,10 +2421,16 @@ class JarvisLive:
         except Exception:
             pass
 
+        loop = asyncio.get_event_loop()
+
         news_future = None
         if briefing_news:
-            loop = asyncio.get_event_loop()
             news_future = loop.run_in_executor(None, _fetch_news_sync, "top world news today")
+
+        # Day-ahead context (tomorrow's calendar + unread mail) pre-fetches in
+        # the same breath as the news. _fetch_day_ahead is consent-free and
+        # never raises: no Google setup → "" → Phase 2 simply omits it.
+        brief_future = loop.run_in_executor(None, _fetch_day_ahead)
 
         await asyncio.sleep(0.3)
         if not self.session:
@@ -2472,15 +2484,18 @@ class JarvisLive:
         self.ui.write_log("SYS: Briefing phase 1 (greeting) sent.")
 
         # ── Phase 2: fire as soon as Phase 1 audio is done ───────────────────
-        async def _deliver_news():
+        async def _deliver_phase2():
             try:
                 lang_str = (f" Speak in {lang} unless the user has since "
                             f"spoken another language, in which case use theirs."
                             if lang else "")
 
-                # Wait for news fetch (already running) and Phase 1 turn-complete
-                # in parallel — whichever takes longer determines the wait time
-                news_done   = asyncio.wrap_future(news_future)
+                # Wait for the prefetches (already running) and Phase 1
+                # turn-complete in parallel — whichever takes longer determines
+                # the wait time.
+                news_done   = (asyncio.wrap_future(news_future)
+                               if news_future is not None else None)
+                brief_done  = asyncio.wrap_future(brief_future)
                 turn_waited = False
                 if self._turn_done_event:
                     try:
@@ -2498,15 +2513,36 @@ class JarvisLive:
                 else:
                     await asyncio.sleep(1.0)
 
+                news_text = ""
+                if news_done is not None:
+                    try:
+                        news_text = await asyncio.wait_for(news_done, timeout=4.0)
+                    except Exception:
+                        news_text = ""
+
                 try:
-                    news_text = await asyncio.wait_for(news_done, timeout=4.0)
+                    brief_text = (await asyncio.wait_for(brief_done, timeout=8.0) or "").strip()
                 except Exception:
-                    news_text = ""
+                    brief_text = ""
 
                 if not self.session:
                     return
 
-                if news_text and len(news_text) > 60:
+                has_news  = bool(news_text and len(news_text) > 60)
+                has_brief = bool(brief_text)
+
+                if has_news and has_brief:
+                    self.ui.show_content("BRIEFING — headlines & day ahead",
+                                         f"{news_text}\n\n{brief_text}")
+                    p2 = (
+                        f"[BRIEFING] Here are today's top news headlines:\n{news_text}\n\n"
+                        f"And here is the day ahead:\n{brief_text}\n\n"
+                        "Pick ONE headline and summarise it in one sentence, then give "
+                        "the unread-mail count and tomorrow's events in one or two short "
+                        "sentences, and say the full list is displayed on screen. "
+                        f"Do not call any tools.{lang_str}"
+                    )
+                elif has_news:
                     # Show on UI content panel immediately
                     self.ui.show_content("NEWS — top world news today", news_text)
 
@@ -2515,23 +2551,34 @@ class JarvisLive:
                         "Pick ONE headline, summarise it in one sentence, then say the full list "
                         f"is displayed on screen. Do not call any tools.{lang_str}"
                     )
-                else:
+                elif has_brief:
+                    self.ui.show_content("BRIEFING — day ahead", brief_text)
+                    p2 = (
+                        f"[BRIEFING] Here is the day ahead:\n{brief_text}\n\n"
+                        "In one or two short sentences, give the unread-mail count and "
+                        "tomorrow's events — how many there are, and the first one or two "
+                        f"with their times. Do not call any tools.{lang_str}"
+                    )
+                elif briefing_news:
                     p2 = (
                         "News headlines could not be fetched right now. "
                         f"Let the user know briefly.{lang_str}"
                     )
+                else:
+                    return          # nothing to deliver — stay quiet
 
                 await self.session.send_client_content(
                     turns={"role": "user", "parts": [{"text": p2}]},
                     turn_complete=True,
                 )
-                self.ui.write_log("SYS: Briefing phase 2 (news) sent.")
+                self.ui.write_log("SYS: Briefing phase 2 (news/day-ahead) sent.")
             except Exception as e:
                 print(f"[Briefing] Phase 2 error: {e}")
                 self.ui.write_log(f"SYS: Briefing phase 2 failed: {e}")
 
-        if briefing_news:            # phase 2 (news) only when explicitly enabled
-            asyncio.create_task(_deliver_news())
+        # Phase 2 always runs now: news when enabled, day-ahead whenever the
+        # Google connection is set up. With neither it exits silently.
+        asyncio.create_task(_deliver_phase2())
 
     # ── Conversation uptime ─────────────────────────────────────────────────
 

@@ -205,7 +205,7 @@ The matrix below maps each spec domain to the corresponding JARVIS component(s),
 | **Hermes Health Probes** | ✅ Present | `actions/hermes_health.py` — gateway/bridge/telegram/llm/fallback/prices, deep mode, price-source freshness stale-check + BTC cross-source agreement | N/A (part of channel runtime) |
 | **PDF Forwarding** | ✅ Present | `hermes-hooks/jarvis-pdf-forward/handler.py` — DIRECTORY hook (event: `agent:end`) forwarding PDFs with remember-intent → `jarvis_inbox.py` → `/api/message` | N/A (handled by channel integrations) |
 | **Web Search** | ✅ Present | `actions/web_search.py` — Gemini Grounded first, DDG fallback (`news`/`research`/`price`/`compare`/`search`) | Managed Exa proxy, BYOK Exa/Brave/Querit/Tavily, self-hosted SearXNG |
-| **Third-Party Integrations** | ❌ Missing | No OAuth integration catalog; relies on Hermes bridge for Telegram/WhatsApp | 118+ integrations via Composio (Gmail, Notion, GitHub, Slack, Stripe, …) |
+| **Third-Party Integrations** | 🟡 Partial | Direct Google OAuth for Gmail + Calendar (`actions/gmail_control.py`, `actions/calendar_control.py`, shared `_google_auth.py`); no general integration catalog — Telegram/WhatsApp still ride the Hermes bridge | 118+ integrations via Composio (Gmail, Notion, GitHub, Slack, Stripe, …) |
 | **Integrations Catalog** | ❌ Missing | No integration discovery or auto-fetch | One-click OAuth; 20-minute auto-fetch into Memory Tree |
 | **Direct Telegram** | ❌ Missing | Depends on Hermes bridge proxy | Native Telegram channel driver (Bot API long-poll, managed or BYO BotFather token) |
 | **Email channel** | ❌ Missing |  | Native self-hosted IMAP IDLE + SMTP connector (no third-party broker); `allowed_senders` allowlist |
