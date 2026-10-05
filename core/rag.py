@@ -143,6 +143,97 @@ def extract_pages(pdf_path: str) -> list[str]:
     return []
 
 
+# ── other document types (txt / md / docx) ─────────────────────────────────
+# The library is not only PDFs: notes and exports arrive as plain text and
+# Word documents. Each becomes "pages" so chunking and page attribution stay
+# uniform downstream — for page-less formats a page is a window of text cut
+# at paragraph boundaries, not a lie about paper.
+
+_PLAIN_SUFFIXES = frozenset({"txt", "md", "markdown", "log", "csv"})
+_PAGE_WINDOW_CHARS = 6000          # synthetic page size for page-less formats
+
+
+def _sniffs_pdf(path: Path) -> bool:
+    """Content sniff: a mis-suffixed PDF is still a PDF."""
+    try:
+        with open(path, "rb") as f:
+            return f.read(5) == b"%PDF-"
+    except Exception:
+        return False
+
+
+def _extract_docx(path: Path) -> list[str]:
+    """docx → synthetic pages of concatenated paragraphs. python-docx is
+    already a dependency (file_processor), so this adds no install weight."""
+    try:
+        from docx import Document
+        doc = Document(str(path))
+    except Exception:
+        return []
+    pages: list[str] = []
+    buf: list[str] = []
+    size = 0
+    for para in doc.paragraphs:
+        text = (para.text or "").strip()
+        if not text:
+            continue
+        buf.append(text)
+        size += len(text) + 2
+        if size >= _PAGE_WINDOW_CHARS:
+            pages.append("\n\n".join(buf))
+            buf, size = [], 0
+    if buf:
+        pages.append("\n\n".join(buf))
+    return pages
+
+
+def _extract_plain(path: Path) -> list[str]:
+    """txt/md/log/csv → synthetic pages cut on blank lines when possible,
+    so a paragraph is never split across pages mid-thought."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return []
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    pages: list[str] = []
+    buf: list[str] = []
+    size = 0
+    for para in paragraphs:
+        if len(para) > _PAGE_WINDOW_CHARS:
+            if buf:
+                pages.append("\n\n".join(buf))
+                buf, size = [], 0
+            pages.append(para)
+            continue
+        if size + len(para) > _PAGE_WINDOW_CHARS and buf:
+            pages.append("\n\n".join(buf))
+            buf, size = [], 0
+        buf.append(para)
+        size += len(para) + 2
+    if buf:
+        pages.append("\n\n".join(buf))
+    return pages
+
+
+def extract_document(path: str) -> tuple[list[str], str]:
+    """Text of any supported document type as pages, plus its filetype tag.
+
+    Dispatch: PDF magic/extension → extract_pages (with OCR downstream),
+    .docx → python-docx, plain-text suffixes → windowed pages. Returns
+    ([...], filetype) with filetype in {pdf, docx, txt, md, ...} — "unknown"
+    when nothing matches, which ingest() reports as an unsupported file.
+    """
+    p = Path(path)
+    suffix = p.suffix.lower().lstrip(".")
+    if suffix == "pdf" or _sniffs_pdf(p):
+        return extract_pages(str(p)), "pdf"
+    if suffix == "docx":
+        return _extract_docx(p), "docx"
+    if suffix in _PLAIN_SUFFIXES:
+        return _extract_plain(p), suffix
+    return [], "unknown"
+
+
 # ── OCR (scanned pages) ──────────────────────────────────────────────────────
 # System tools, deliberately: pdftoppm rasterises, tesseract recognises. Both
 # run locally, cost no API quota and keep private documents on this machine —
@@ -498,6 +589,41 @@ def _search_lexical(query: str, top_k: int,
     return scored[:top_k]
 
 
+def _replace_doc_rows(doc_id: str, rows: list[dict], vectors: list) -> int:
+    """Atomically swap one document's rows in the index (update / reindex).
+
+    Drops every existing row of doc_id, appends the new rows + vectors,
+    rewrites both files under the lock, and returns the row base. `rows` must
+    be complete chunk rows (doc_id, text, page, …) — only "index" is set here.
+    Callers hold _kb_lock. Shared by update() and deep_reingest() so the two
+    can never drift apart.
+    """
+    _, count = _load_vectors()
+    existing = _read_chunks(count)
+    keep_rows = [r for r in existing if r["doc_id"] != doc_id]
+    keep_idx = [r["index"] for r in existing if r["doc_id"] != doc_id]
+    mat, _ = _load_vectors()
+    if keep_idx:
+        mat = mat[keep_idx]
+    else:
+        mat = np.zeros((0, mat.shape[1] if mat.size else len(vectors[0])),
+                       dtype=np.float32)
+    base = len(keep_rows)
+    new_rows: list[dict] = []
+    for i, row in enumerate(rows):
+        r = dict(row)
+        r["index"] = base + i
+        new_rows.append(r)
+    mat = np.vstack([mat, np.asarray(vectors, dtype=np.float32)]) \
+        if mat.size else np.asarray(vectors, dtype=np.float32)
+    np.savez_compressed(VECTORS_FILE, vectors=mat,
+                        count=len(keep_rows) + len(new_rows))
+    with open(CHUNKS_FILE, "w", encoding="utf-8") as f:
+        for r_ in keep_rows + new_rows:
+            f.write(json.dumps(r_, ensure_ascii=False) + "\n")
+    return base
+
+
 # ── ingest ───────────────────────────────────────────────────────────────────
 
 def _next_version(reg: dict, doc_hash: str, collection: str, title: str) -> int:
@@ -509,19 +635,25 @@ def _next_version(reg: dict, doc_hash: str, collection: str, title: str) -> int:
     return 1
 
 
-def ingest(pdf_path: str, collection: str = DEFAULT_COLLECTION,
-           title: str | None = None, source: str = "local") -> dict:
+def ingest(file_path: str, collection: str = DEFAULT_COLLECTION,
+           title: str | None = None, source: str = "local",
+           access: str = "private", metadata: dict | None = None) -> dict:
     """RECEIVE → EXTRACT → CLEAN → CHUNK → METADATA → EMBED → INDEX → REGISTER.
 
     The original file is stored verbatim FIRST (traceability before anything
     else). A document whose embeddings fail is registered with
     status="failed" and nothing is indexed — no half-remembered books.
+
+    PDFs, .docx and plain-text files (txt/md/log/csv) are supported; the
+    filetype is stored in the registry and the original keeps its real suffix.
     """
-    path = Path(pdf_path).expanduser()
+    path = Path(file_path).expanduser()
     if not path.exists():
         return {"ok": False, "error": f"file not found: {path}"}
     if collection not in COLLECTIONS:
         collection = DEFAULT_COLLECTION
+    access = access if access in ("private", "shared") else "private"
+    extra_meta = dict(metadata) if isinstance(metadata, dict) else {}
 
     doc_hash = _sha256(path)
     reg = _load_registry()
@@ -539,8 +671,8 @@ def ingest(pdf_path: str, collection: str = DEFAULT_COLLECTION,
     title = (title or path.stem).strip()[:120]
     version = _next_version(reg, doc_hash, collection, title)
 
-    pages = extract_pages(str(path))
-    if not any(p.strip() for p in pages):
+    pages, filetype = extract_document(str(path))
+    if not any(p.strip() for p in pages) and filetype == "pdf":
         # No text layer → try OCR before giving up. Scanned trading PDFs are
         # common in this library; this is what makes them rememberable.
         print(f"[RAG] 🔍 No text layer on '{path.name}' — running OCR "
@@ -552,6 +684,10 @@ def ingest(pdf_path: str, collection: str = DEFAULT_COLLECTION,
     clean = [_clean_page(p) for p in pages]
     page_count = len([p for p in clean if p.strip()])
     if page_count == 0:
+        if filetype == "unknown":
+            return {"ok": False,
+                    "error": ("unsupported file type — ingest PDF, docx, "
+                              "txt, md, log or csv")}
         return {"ok": False,
                 "error": ("no extractable text and OCR found nothing "
                           "(empty, encrypted, or unrecognisable scan)")}
@@ -591,10 +727,11 @@ def ingest(pdf_path: str, collection: str = DEFAULT_COLLECTION,
     if not chunks:
         return {"ok": False, "error": "chunking produced nothing"}
 
-    # 1. the original, verbatim
+    # 1. the original, verbatim (real suffix — PDFs stay PDFs, notes stay notes)
     KB_DIR.mkdir(parents=True, exist_ok=True)
     LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
-    stored = LIBRARY_DIR / f"{doc_id}.pdf"
+    stored = LIBRARY_DIR / f"{doc_id}.{filetype}" if filetype != "unknown" \
+        else LIBRARY_DIR / f"{doc_id}.bin"
     if not stored.exists():
         stored.write_bytes(path.read_bytes())
 
@@ -618,8 +755,11 @@ def ingest(pdf_path: str, collection: str = DEFAULT_COLLECTION,
                 "page": c["page"],
                 "title": title,
                 "collection": collection,
+                "filetype": filetype,
                 "source": source,
                 "version": version,
+                "access": access,
+                "metadata": dict(extra_meta),
                 "vision": c["page"] in vision_pages,
             })
             new_rows.append(rows[-1])
@@ -637,9 +777,12 @@ def ingest(pdf_path: str, collection: str = DEFAULT_COLLECTION,
             "hash": doc_hash,
             "collection": collection,
             "version": version,
+            "filetype": filetype,
             "page_count": page_count,
             "chunk_count": len(chunks),
             "source_channel": source,   # records +ocr when OCR rescued it
+            "access": access,           # private | shared — read gate for callers
+            "metadata": extra_meta,     # free-form (channel, chat_id, tags…)
             "ingested_at": datetime.now().isoformat(timespec="seconds"),
             "status": "indexed",
             "embed_model": EMBED_MODEL_TAG,
@@ -650,11 +793,19 @@ def ingest(pdf_path: str, collection: str = DEFAULT_COLLECTION,
 
     _audit("ingest", f"{doc_id} v{version} '{title}' "
                      f"({page_count}p/{len(chunks)} chunks, "
-                     f"{len(vision_pages)} vision) [{collection}]")
+                     f"{len(vision_pages)} vision) [{collection}:{access}]")
     return {"ok": True, "doc_id": doc_id, "title": title, "pages": page_count,
             "chunks": len(chunks), "version": version, "duplicate": False,
-            "collection": collection,
+            "collection": collection, "filetype": filetype, "access": access,
             "vision_pages": sorted(vision_pages)}
+
+
+def _resolve_original(doc_id: str) -> Path | None:
+    """The stored original of a document, whatever suffix it was saved with."""
+    for p in sorted(LIBRARY_DIR.glob(f"{doc_id}.*")):
+        if p.is_file() and not p.name.endswith(".png"):
+            return p
+    return None
 
 
 # ── search ───────────────────────────────────────────────────────────────────
@@ -677,9 +828,9 @@ def deep_reingest(doc_id: str, ocr_max_pages: int = None,
     entry = reg.get(doc_id)
     if not entry:
         return {"ok": False, "error": f"unknown document: {doc_id}"}
-    original = LIBRARY_DIR / f"{doc_id}.pdf"
-    if not original.exists():
-        return {"ok": False, "error": f"stored original missing: {original}"}
+    original = _resolve_original(doc_id)
+    if original is None:
+        return {"ok": False, "error": f"stored original missing: {doc_id}"}
 
     ocr_cap = ocr_max_pages if ocr_max_pages is not None else OCR_MAX_PAGES
     vision_cap = vision_max_pages if vision_max_pages is not None else VISION_MAX_PAGES * 4
@@ -747,37 +898,20 @@ def deep_reingest(doc_id: str, ocr_max_pages: int = None,
     page_count = len([p for p in clean if p.strip()])
     with _kb_lock:
         reg = _load_registry()          # re-read under lock
-        # drop this doc's old rows, then append the deep-pass chunks
-        _, count = _load_vectors()
-        rows = _read_chunks(count)
-        keep_rows = [r for r in rows if r["doc_id"] != doc_id]
-        keep_idx = [r["index"] for r in rows if r["doc_id"] != doc_id]
-        mat, _ = _load_vectors()
-        if keep_idx:
-            mat = mat[keep_idx]
-        else:
-            mat = np.zeros((0, mat.shape[1] if mat.size else len(vectors[0])),
-                           dtype=np.float32)
-        base = len(keep_rows)
-        new_rows = []
-        for i, c in enumerate(chunks):
-            new_rows.append({
-                "doc_id": doc_id,
-                "index": base + i,
-                "text": c["text"],
-                "page": c["page"],
-                "title": title,
-                "collection": collection,
-                "source": source,
-                "version": version,
-                "vision": c["page"] in vision_pages,
-            })
-        mat = np.vstack([mat, np.asarray(vectors, dtype=np.float32)]) \
-            if mat.size else np.asarray(vectors, dtype=np.float32)
-        np.savez_compressed(VECTORS_FILE, vectors=mat, count=len(keep_rows) + len(new_rows))
-        with open(CHUNKS_FILE, "w", encoding="utf-8") as f:
-            for r_ in keep_rows + new_rows:
-                f.write(json.dumps(r_, ensure_ascii=False) + "\n")
+        full_rows = [{
+            "doc_id": doc_id,
+            "text": c["text"],
+            "page": c["page"],
+            "title": title,
+            "collection": collection,
+            "filetype": entry.get("filetype", "pdf"),
+            "source": source,
+            "version": version,
+            "access": entry.get("access", "private"),
+            "metadata": entry.get("metadata") or {},
+            "vision": c["page"] in vision_pages,
+        } for c in chunks]
+        base = _replace_doc_rows(doc_id, full_rows, vectors)
 
         entry = dict(entry)
         entry.update({
@@ -805,12 +939,195 @@ def deep_reingest(doc_id: str, ocr_max_pages: int = None,
             "duplicate": False}
 
 
+def _patch_doc_rows(doc_id: str, **fields) -> int:
+    """Rewrite selected metadata fields on every index row of doc_id — the
+    metadata-only update path: citations must never serve stale access/title
+    after a patch. Vectors are untouched. Callers hold _kb_lock. Returns the
+    number of rows patched."""
+    rows = _read_chunks()
+    if not rows:
+        return 0
+    n = 0
+    for r in rows:
+        if r["doc_id"] == doc_id:
+            r.update(fields)
+            n += 1
+    with open(CHUNKS_FILE, "w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    return n
+
+
+def _build_rows(doc_id: str, chunks: list[dict], *, title: str,
+                collection: str, filetype: str, source: str, version: int,
+                access: str = "private", metadata: dict | None = None,
+                vision_pages: dict[int, str] | set[int] | None = None) -> list[dict]:
+    """Complete index rows for one document — the single metadata schema shared
+    by ingest, update and deep_reingest so a citation never depends on which
+    path produced it."""
+    vp = vision_pages or {}
+    vp_set = set(vp) if not isinstance(vp, set) else vp
+    return [{
+        "doc_id": doc_id,
+        "text": c["text"],
+        "page": c["page"],
+        "title": title,
+        "collection": collection,
+        "filetype": filetype,
+        "source": source,
+        "version": version,
+        "access": access,
+        "metadata": dict(metadata or {}),
+        "vision": c["page"] in vp_set,
+    } for c in chunks]
+
+
+def update(doc_id: str, new_path: str | None = None,
+           text: str | None = None, title: str | None = None,
+           collection: str | None = None, access: str | None = None,
+           metadata: dict | None = None,
+           reindex: bool = True) -> dict:
+    """Update a document — edit metadata in place, or replace its content.
+
+    Content replacement (new_path or text given): re-extract, re-chunk, embed
+    the NEW chunks, then atomically swap this doc's rows. The old vectors are
+    never mixed with the new — half-old answers are worse than a slow update.
+    The version bumps when content actually changed.
+
+    Metadata-only (no content): title/collection/access/metadata are patched
+    with zero re-embedding cost.
+    """
+    reg = _load_registry()
+    entry = reg.get(doc_id)
+    if not entry:
+        return {"ok": False, "error": f"unknown document: {doc_id}"}
+
+    meta_only = new_path is None and text is None
+    if meta_only:
+        with _kb_lock:
+            reg = _load_registry()
+            e = reg.get(doc_id)
+            if not e:
+                return {"ok": False, "error": f"document vanished: {doc_id}"}
+            row_fields: dict = {}
+            if title is not None and str(title).strip():
+                e["title"] = str(title).strip()[:120]
+                row_fields["title"] = e["title"]
+            if collection is not None and collection in COLLECTIONS:
+                e["collection"] = collection
+                row_fields["collection"] = collection
+            if access is not None and access in ("private", "shared"):
+                e["access"] = access
+                row_fields["access"] = access
+            if isinstance(metadata, dict):
+                merged = dict(e.get("metadata") or {})
+                merged.update(metadata)
+                e["metadata"] = merged
+                row_fields["metadata"] = merged
+            if row_fields:
+                _patch_doc_rows(doc_id, **row_fields)
+            _save_registry(reg)
+        _audit("update_meta", f"{doc_id} '{e.get('title')}'")
+        return {"ok": True, "doc_id": doc_id, "updated_fields": True,
+                "title": e.get("title")}
+
+    if not reindex:
+        return {"ok": True, "doc_id": doc_id, "reindexed": False}
+
+    # ── content replacement ─────────────────────────────────────────────
+    if text is not None:
+        pages = [text]
+        filetype = entry.get("filetype", "txt")
+        new_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    else:
+        p = Path(new_path).expanduser()
+        if not p.exists():
+            return {"ok": False, "error": f"file not found: {new_path}"}
+        pages, filetype = extract_document(str(p))
+        new_hash = _sha256(p)
+    if not any(pg.strip() for pg in pages) and filetype == "pdf" and text is None:
+        pages = ocr_pdf_pages(str(p))
+    if not any(pg.strip() for pg in pages):
+        return {"ok": False, "error": "new content has no extractable text"}
+
+    clean = [_clean_page(pg) for pg in pages]
+    page_count = len([pg for pg in clean if pg.strip()])
+    chunks = chunk_pages(clean)
+    if not chunks:
+        return {"ok": False, "error": "chunking produced nothing"}
+
+    version = int(entry.get("version", 1)) + (1 if new_hash != entry.get("hash") else 0)
+    source = f"update-v{version}"
+    new_title = (title or entry.get("title") or doc_id)
+    new_collection = collection if collection in COLLECTIONS \
+        else entry.get("collection", DEFAULT_COLLECTION)
+    new_access = access if access in ("private", "shared") \
+        else entry.get("access", "private")
+    new_meta = dict(entry.get("metadata") or {})
+    if isinstance(metadata, dict):
+        new_meta.update(metadata)
+
+    from core import gemini
+    vectors = gemini.embed([c["text"] for c in chunks], is_query=False)
+    vectors = [_normalise(v) for v in vectors]
+
+    with _kb_lock:
+        reg = _load_registry()
+        e = reg.get(doc_id)
+        if not e:
+            return {"ok": False, "error": f"document vanished: {doc_id}"}
+        # store the new original when the content came from a file; drop a
+        # stale original whose suffix changed (pdf → txt update)
+        if text is None:
+            stored = LIBRARY_DIR / f"{doc_id}.{filetype}" if filetype != "unknown" \
+                else LIBRARY_DIR / f"{doc_id}.bin"
+            for old in LIBRARY_DIR.glob(f"{doc_id}.*"):
+                if old != stored and old.is_file() \
+                        and not old.name.endswith(".png"):
+                    try:
+                        old.unlink()
+                    except OSError:
+                        pass
+            stored.write_bytes(p.read_bytes())
+        base = _replace_doc_rows(doc_id, _build_rows(
+            doc_id, chunks, title=new_title, collection=new_collection,
+            filetype=filetype, source=source, version=version,
+            access=new_access, metadata=new_meta), vectors)
+        e.update({
+            "version": version,
+            "hash": new_hash,
+            "filetype": filetype,
+            "title": new_title,
+            "collection": new_collection,
+            "access": new_access,
+            "metadata": new_meta,
+            "page_count": page_count,
+            "chunk_count": len(chunks),
+            "source_channel": source,
+            "status": "indexed",
+            "vectors_row_base": base,
+        })
+        reg[doc_id] = e
+        _save_registry(reg)
+
+    _audit("update", f"{doc_id} v{version} '{new_title}' "
+                     f"({page_count}p/{len(chunks)} chunks) [{new_collection}]")
+    return {"ok": True, "doc_id": doc_id, "title": new_title,
+            "pages": page_count, "chunks": len(chunks), "version": version,
+            "collection": new_collection, "duplicate": False}
+
+
 def search(query: str, top_k: int = 5, collection: str | None = None,
-           doc_id: str | None = None) -> dict:
+           doc_id: str | None = None,
+           allowed_docs: set[str] | None = None) -> dict:
     """Embed the query, return the strongest chunks with full citations.
 
     Falls back to lexical scoring when the embedding call fails — degraded
     but honest, and never empty without saying why.
+
+    allowed_docs is the caller's read whitelist (service-level ACL); when
+    given, it INTERSECTS with any doc_id/collection filter — a caller can
+    never widen its scope past what it is allowed to see.
     """
     if not query.strip():
         return {"ok": False, "error": "empty query"}
@@ -830,6 +1147,12 @@ def search(query: str, top_k: int = 5, collection: str | None = None,
         if not allowed:
             return {"ok": True, "results": [], "mode": "none",
                     "note": f"collection '{collection}' is empty"}
+    if allowed_docs is not None:
+        allowed = (allowed & allowed_docs) if allowed is not None \
+            else set(allowed_docs)
+        if not allowed:
+            return {"ok": True, "results": [], "mode": "none",
+                    "note": "no documents in scope for this caller"}
 
     with _kb_lock:
         _, count = _load_vectors()
@@ -857,7 +1180,10 @@ def search(query: str, top_k: int = 5, collection: str | None = None,
             "page": r.get("page"),
             "doc_id": r["doc_id"],
             "collection": r.get("collection"),
+            "filetype": r.get("filetype"),
             "version": r.get("version"),
+            "access": r.get("access", "private"),
+            "metadata": r.get("metadata") or {},
             "vision": bool(r.get("vision")),
             "score": round(h["score"], 4),
         })

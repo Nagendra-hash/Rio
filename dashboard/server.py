@@ -497,6 +497,26 @@ class DashboardServer:
         self._uploads_dir                 = UPLOADS_DIR
         self._login_html                  = _read("login.html")
         self._app_html                    = _read("app.html")
+        # The static API token the user configured (config/api_keys.json →
+        # dashboard_auth_token, written by the settings UI and read by
+        # config_manager.get_dashboard_token) is a VALID credential, and
+        # _auth() below only accepts what is in self._tokens — which used to
+        # start EMPTY and only ever gained QR-pairing session tokens. So the
+        # documented static token was rejected with 401 forever, and every
+        # non-browser client that used it (scripts/jarvis_inbox.py, and with it
+        # the whole Hermes/Telegram bridge: jarvis-pdf-forward and
+        # jarvis-google-bridge) could never deliver a message.
+        #
+        # Seeding it here restores what the config file already promises. The
+        # token is user-chosen and gitignored; when it is absent (the default)
+        # nothing is added and auth behaves exactly as before.
+        try:
+            from memory.config_manager import get_dashboard_token
+            static_tok = (get_dashboard_token() or "").strip()
+            if static_tok:
+                self._tokens.add(static_tok)
+        except Exception:
+            pass
         self.app                          = self._build_app()
 
     # ── one-time key management ───────────────────────────────────────────
@@ -798,6 +818,20 @@ class DashboardServer:
                     return JSONResponse({"error": "empty message"}, status_code=400)
 
                 target = f"{channel}:{chat_id}" if chat_id else channel
+
+                # ── Orchestrator observe point (Phase 1) ────────────────
+                # Shadow-mode by default: classify + journal the turn, then
+                # proceed EXACTLY as before. Wrapped so it can never break
+                # the Hermes intake path. JARVIS_ORCHESTRATOR=on/off changes
+                # the mode; see orchestrator/integration.py.
+                try:
+                    from orchestrator import integration as _orch_integration
+                    _orch_integration.observe_user_turn(
+                        text, channel=channel, chat_id=chat_id,
+                        attachments=[saved] if saved else None)
+                except Exception:
+                    pass
+
                 line = f"[INBOUND {target}] {text}".rstrip()
                 if saved:
                     line += f"\n[FILE: {saved}]"
@@ -826,6 +860,36 @@ class DashboardServer:
             if self._wake_callback:
                 self._wake_callback()
             return JSONResponse({"ok": True})
+
+        @app.get("/api/orchestrator")
+        async def orchestrator_status(req: Request):
+            """Phase 1 orchestrator status: mode + registered agents."""
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            try:
+                from orchestrator import integration as _orch_integration
+                orch = _orch_integration.shared_orchestrator()
+                import os as _os
+                mode = (_os.environ.get("JARVIS_ORCHESTRATOR") or "shadow").strip().lower()
+                return JSONResponse({
+                    "ok": True,
+                    "mode": mode if mode in {"on", "shadow", "off"} else "shadow",
+                    "agents": orch.registry.describe(),
+                    "pending_approvals": len(orch.approvals),
+                })
+            except Exception as exc:
+                return JSONResponse({"ok": False, "error": str(exc)},
+                                    status_code=200)
+
+        # ── RAG service REST surface ─────────────────────────────────────
+        # Upload, index, query, update, forget — every call goes through
+        # core/rag_service (ACL + verdicts), never straight to core/rag.
+        # Auth stays here (_auth); this module only maps HTTP → service.
+        try:
+            from dashboard.rag_api import register as _rag_register
+            _rag_register(app, _auth)
+        except Exception as _rag_exc:
+            print(f"[Dashboard] RAG API unavailable: {_rag_exc}")
 
         # ── News key (CurrentsAPI) ────────────────────────────────────────────
         # The dashboard ⚙ Settings panel needs these to store the key that

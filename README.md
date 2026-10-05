@@ -33,7 +33,7 @@ A real-time voice assistant that hears, sees, speaks, and controls your computer
 | 🎙️ **Voice & HUD** | Gemini Live conversation in any language, wake word, push-to-talk (Ctrl+Space), 5 native voices, live theming, waveform, unlimited sessions via context compression, session resumption across reconnects |
 | 🎵 **Media** | In-HUD music (JioSaavn by default — streams resolved and played internally; Gaana, Spotify, Wynk, Amazon Music, YouTube Music), in-HUD video (YouTube/local/direct URL), global media-key transport, **now-playing** via the OS media session (MPRIS / SMTC / AppleScript) |
 | 🖥️ **Computer control** | Launch apps, volume/brightness/WiFi/power, file operations with undo, browser and desktop control, Android/phone control, keyboard/mouse automation, screen + webcam vision |
-| 🧠 **Memory & knowledge** | Persistent memory with recall on demand, conversation journal, local RAG knowledge base for your PDFs, clipboard intelligence (translate/summarise/explain) |
+| 🧠 **Memory & knowledge** | Persistent memory with recall on demand, conversation journal, local RAG knowledge base (PDF/docx/text → chunked, embedded, cited answers) behind a service API with per-caller collection ACL (`config/rag_callers.json`) and REST endpoints (`/api/rag/*`), clipboard intelligence (translate/summarise/explain) |
 | 🔍 **Information** | Multi-mode web search (news/research/price), weather, news, flight search, morning briefing, proactive check-ins, background topic monitoring |
 | 📊 **Trading & data** | Bitcoin/gold/USD price levels from a local tracker, TradingAgents multi-analyst equity runs, market desk plugin |
 | 🧩 **Extensibility** | Skills are single files in `actions/` that declare a `TOOL` dict and are auto-discovered; plugins are single files in `plugins/`; Hermes skills install from a GitHub URL by voice |
@@ -85,7 +85,8 @@ Single-process Python app; everything local by default.
 │   show_video / pause_video / stop_video / set_video_muted         │
 └───────────────────────────────────────────────────────────────────┘
 core/      gemini.py (model ladder) · llm_router.py · action_loader.py
-           rag.py (knowledge base) · echo.py (self-echo guard) · wake_word.py
+           rag.py + rag_service.py (RAG library + ACL service — see
+           docs/rag_architecture.md) · echo.py (self-echo guard) · wake_word.py
 actions/   30+ skills, each a file with a module-level TOOL dict:
            music_player · video_player · web_search · computer_settings
            knowledge_base · trading_agents · hermes_task · …

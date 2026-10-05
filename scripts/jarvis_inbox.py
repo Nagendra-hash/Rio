@@ -27,6 +27,15 @@ CONFIG (env, both optional — defaults below):
     JARVIS_DASHBOARD_URL   default: http://127.0.0.1:8000
     JARVIS_DASHBOARD_TOKEN dashboard static token (⚙ Settings → API access token)
 
+RAG MODE (--rag)
+    --rag [collection] ingests the --file document DIRECTLY into the RAG
+    knowledge base through the dashboard's /api/rag/ingest-path endpoint —
+    no Gemini session, no LLM: pure indexing (extract → chunk → embed →
+    index). Use it when the caption says remember/save: the reply comes back
+    as structured JSON from the RAG service (doc_id, pages, chunks), which
+    the reply arm forwards to the channel. Without --rag the message goes to
+    the normal Jarvis session (model decides read-once vs remember).
+
 EXIT: 0 = delivered to Jarvis, 1 = failed (with reason on stderr).
 """
 import os
@@ -123,6 +132,58 @@ def send(channel: str, chat_id: str, text: str, file_path: str | None) -> int:
         return 1
 
 
+def send_rag(file_path: str, collection: str, title: str | None,
+             chat_id: str) -> int:
+    """Direct RAG ingestion — /api/rag/ingest-path, no LLM session."""
+    token = _token()
+    if not token:
+        print("error: no dashboard token (set JARVIS_DASHBOARD_TOKEN "
+              "or save it via the dashboard settings)", file=sys.stderr)
+        return 1
+    p = Path(file_path).expanduser()
+    if not p.exists():
+        print(f"error: file not found: {p}", file=sys.stderr)
+        return 1
+    payload = {
+        "path": str(p),
+        "collection": collection,
+        "source": "hermes",
+        "metadata": {"channel_chat": chat_id} if chat_id else {},
+    }
+    if title:
+        payload["title"] = title
+    req = urllib.request.Request(
+        f"{DASHBOARD_URL}/api/rag/ingest-path",
+        data=json.dumps(payload).encode(), method="POST",
+        headers={"Authorization": f"Bearer {token}",
+                 "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=120, context=_SSL_CTX) as resp:
+            out = json.loads(resp.read().decode())
+            if out.get("ok"):
+                if out.get("duplicate"):
+                    print(f"already remembered: {out.get('title')}")
+                else:
+                    print(f"indexed '{out.get('title')}' — "
+                          f"{out.get('pages')} pages, {out.get('chunks')} chunks "
+                          f"(doc_id {out.get('doc_id')}, collection "
+                          f"{out.get('collection')})")
+                return 0
+            print(f"error: {out.get('error', out)}", file=sys.stderr)
+            return 1
+    except urllib.error.HTTPError as e:
+        detail = ""
+        try:
+            detail = json.loads(e.read().decode()).get("error", "")
+        except Exception:
+            pass
+        print(f"error: HTTP {e.code} {detail}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+
+
 if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser(description="Forward a Hermes/Telegram/"
@@ -135,6 +196,28 @@ if __name__ == "__main__":
                     help="message text or the document's caption")
     ap.add_argument("--file", dest="file_path", default=None,
                     help="local path of the attachment Hermes already saved")
+    ap.add_argument("--rag", dest="rag_collection", nargs="?", const="default",
+                    default=None,
+                    help="ingest --file directly into the RAG knowledge base "
+                         "(optionally: collection name); skips the LLM session")
+    ap.add_argument("--title", default=None,
+                    help="optional display title for --rag ingestion")
     a = ap.parse_args()
+
+    if a.rag_collection is not None:
+        if not a.file_path:
+            print("error: --rag needs --file with the document path",
+                  file=sys.stderr)
+            sys.exit(1)
+        collection = a.rag_collection
+        if collection == "default":
+            collection = "personal_knowledge"
+            text = (a.text or "").lower()
+            for cand in ("trading_books", "strategies", "research",
+                         "market_rules", "temporary"):
+                if cand in text:
+                    collection = cand
+                    break
+        sys.exit(send_rag(a.file_path, collection, a.title, a.chat_id))
 
     sys.exit(send(a.channel, a.chat_id, a.text, a.file_path))

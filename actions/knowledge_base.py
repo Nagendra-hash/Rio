@@ -19,7 +19,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from core import rag
+from core import rag_service
+
+# Jarvis IS the owner of the library: the service's CALLER_OWNER — all
+# collections, full write. Every call goes through the service (audit + ACL
+# engine), never straight to core/rag.py.
+_CALLER = "jarvis"
 
 _MAX_EVIDENCE_CHARS = 6000     # context budget for one answer's evidence
 
@@ -53,8 +58,9 @@ def _do_search(params: dict) -> str:
         return "No query given for the knowledge search, sir."
     collection = (params.get("collection") or "").strip() or None
 
-    result = rag.search(query, top_k=int(params.get("top_k", 5)),
-                        collection=collection)
+    result = rag_service.search(caller=_CALLER, query=query,
+                                top_k=int(params.get("top_k", 5)),
+                                collection=collection)
     if not result.get("ok"):
         return f"Knowledge search failed: {result.get('error')}"
 
@@ -65,13 +71,11 @@ def _do_search(params: dict) -> str:
                 f"{f' ({note})' if note else ''}, sir.")
 
     lines = []
+    citations = result.get("citations") or []
     for i, r in enumerate(hits, start=1):
-        cite = f"[{i}] {r['source']}, page {r['page']}"
-        if r.get("vision"):
-            cite += " (chart page — described visually)"
-        if r.get("version") and r["version"] > 1:
-            cite += f" (v{r['version']})"
-        lines.append(f"{cite}  (score {r['score']})\n{r['text']}")
+        cite = citations[i - 1] if i - 1 < len(citations) \
+            else f"{r.get('source')}, page {r.get('page')}"
+        lines.append(f"[{i}] {cite}  (score {r['score']})\n{r['text']}")
 
     evidence = "\n\n".join(lines)
     header = ("Evidence retrieved from your saved documents"
@@ -94,12 +98,14 @@ def _do_ingest(params: dict) -> str:
         return f"File not found: {path}"
 
     collection = (params.get("collection") or "").strip()
-    if collection and collection not in rag.COLLECTIONS:
+    if collection and collection not in rag_service.rag.COLLECTIONS:
         return (f"Unknown collection '{collection}'. Valid ones: "
-                f"{', '.join(rag.COLLECTIONS)}.")
+                f"{', '.join(rag_service.rag.COLLECTIONS)}.")
 
-    result = rag.ingest(str(p), collection=collection or rag.DEFAULT_COLLECTION,
-                        title=params.get("title"), source="jarvis")
+    result = rag_service.ingest(
+        caller=_CALLER, file_path=str(p),
+        collection=collection or rag_service.rag.DEFAULT_COLLECTION,
+        title=params.get("title"), source="jarvis")
     if not result.get("ok"):
         return f"Ingestion failed, sir: {result.get('error')}"
 
@@ -122,7 +128,8 @@ def _do_forget(params: dict) -> str:
         if not needle:
             return ("Give me a doc_id or title to forget, sir. "
                     "Call knowledge_base with action 'list' to see them.")
-        matches = [d for d in rag.list_documents()
+        matches = [d for d in rag_service.list_documents(caller=_CALLER)
+                   .get("documents", [])
                    if needle in (d.get("title") or "").lower()]
         if not matches:
             return f"No remembered document matches '{needle}'."
@@ -131,7 +138,7 @@ def _do_forget(params: dict) -> str:
             return (f"Several documents match — give me the exact doc_id: {names}")
         doc_id = matches[0]["doc_id"]
 
-    result = rag.forget(doc_id)
+    result = rag_service.forget(caller=_CALLER, doc_id=doc_id)
     if not result.get("ok"):
         return f"Could not forget it: {result.get('error')}"
     return f"Forgotten: {result.get('forgotten')}. It is no longer searchable."
@@ -140,11 +147,11 @@ def _do_forget(params: dict) -> str:
 # ── list ─────────────────────────────────────────────────────────────────────
 
 def _do_list() -> str:
-    docs = rag.list_documents()
+    docs = rag_service.list_documents(caller=_CALLER).get("documents", [])
     if not docs:
         return ("The knowledge base is empty, sir. Send me a PDF and say "
                 "'remember this document' to start the library.")
-    s = rag.stats()
+    s = rag_service.stats(caller=_CALLER).get("stats", {})
     coll = ", ".join(f"{k.replace('_', ' ')}: {v}"
                      for k, v in sorted(s["collections"].items()))
     lines = [f"Knowledge base: {s['documents']} documents, "
