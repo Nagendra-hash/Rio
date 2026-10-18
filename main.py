@@ -59,6 +59,27 @@ if _os.environ.get("JARVIS_HOME", "").strip() and not _os.environ.get("HF_HOME",
     _os.environ["HF_HOME"] = str(_hf_home)
     _os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 
+# ── Agent fleet gates: opt-OUT (2026-10-14) ──────────────────────────────────
+# The orchestrator's factory registers a STUB placeholder for every agent
+# whose JARVIS_*_AGENT env gate is not exactly "on" — with nothing set, the
+# RIO Agent Center showed every implemented agent OFFLINE ("registered
+# placeholder — set JARVIS_X_AGENT=on…"). The real implementations ship in
+# this repo and all import cleanly, so the fleet now defaults to ENABLED:
+# each gate defaults to "on" unless you explicitly set it (off/0/false
+# returns that one agent to its stub). Note: chat ROUTING stays in the
+# orchestrator's shadow mode (JARVIS_ORCHESTRATOR), untouched by this.
+for _agent_gate in (
+    "JARVIS_CODING_AGENT", "JARVIS_RESEARCH_AGENT", "JARVIS_TRADING_AGENT",
+    "JARVIS_RAG_AGENT", "JARVIS_SYSTEM_AGENT", "JARVIS_EMAIL_AGENT",
+    "JARVIS_CALENDAR_AGENT", "JARVIS_HEALTH_AGENT", "JARVIS_BRIEFING_AGENT",
+    "JARVIS_MEAL_AGENT", "JARVIS_TRAVEL_AGENT", "JARVIS_FINANCE_AGENT",
+    "JARVIS_STUDY_AGENT", "JARVIS_METAQUEST_AGENT", "JARVIS_PLAN_AGENT",
+    "JARVIS_LEAD_AGENT", "JARVIS_LEGAL_AGENT", "JARVIS_MARKETING_AGENT",
+    "JARVIS_SELF_EVAL_AGENT", "JARVIS_SQL_AGENT", "JARVIS_NEWS_AGENT",
+    "JARVIS_REPLICA_AGENT",
+):
+    _os.environ.setdefault(_agent_gate, "on")
+
 # ── Python 3.10 compatibility: asyncio.TaskGroup & exception groups ──────────
 # asyncio.TaskGroup and the (Base)ExceptionGroup builtins are Python 3.11+
 # features; the deployment machine runs the 3.10 system Python. The shims below
@@ -300,6 +321,13 @@ from memory.memory_manager import (
 )
 from memory.conversation_journal import (
     append_turn, search_journal, maybe_evolve, set_journal_notifier,
+    set_current_conversation as _journal_set_conv,
+)
+from core.response_state import (
+    tracker as _resp_tracker,
+    RECEIVED as _RS_RECEIVED, PROCESSING as _RS_PROCESSING,
+    GENERATING as _RS_GENERATING, COMPLETED as _RS_COMPLETED,
+    FAILED as _RS_FAILED, CANCELLED as _RS_CANCELLED,
 )
 
 # The file-backed tools (open_app, web_search, browser_control, …) are no longer
@@ -608,6 +636,14 @@ def _fmt_time_left(td) -> str:
 # and turn the polite disconnect into a socket kill.
 GOAWAY_GRACE_S = 120.0
 
+# Dashboard command loop bounds. Module-level so tests can shrink them;
+# production values: wait up to 8 s for a (re)connecting session before
+# requeuing, hold the queue for one answer turn at most 120 s, and requeue a
+# session-less command at most 3 times before dropping it.
+_CMD_SESSION_WAIT_S = 8.0
+_CMD_TURN_WAIT_S    = 120.0
+_CMD_MAX_REQUEUES   = 3
+
 def _is_session_limit_close(e: BaseException) -> bool:
     """True if `e` is the WebSocket 1008 close the server uses to enforce its
     GoAway window — an expected event that must not look like an error.
@@ -630,10 +666,139 @@ def _is_session_limit_close(e: BaseException) -> bool:
         return False
     return True
 
+def _is_transient_server_error(e: BaseException) -> bool:
+    """True for a Google-side 1011 "Internal error encountered" websocket
+    close. Observed 2026-10-13 mid-turn during a long tool response; the run
+    loop's 3 s reconnect + the resumption handle restored the conversation
+    untouched, so this is a hiccup, not a code failure. It gets ONE calm line
+    instead of a traceback (the recovery is identical either way)."""
+    code = getattr(e, "code", None)
+    try:
+        return int(code) == 1011
+    except (TypeError, ValueError):
+        return False
+
+
+def _is_invalid_argument_close(e: BaseException) -> bool:
+    """True for the WebSocket 1007 "Request contains an invalid argument"
+    close — a REQUEST problem (bad field or oversized payload), never an
+    API-key problem and never a dead session.
+
+    2026-10-14: arrived right after a send_tool_response carrying the
+    trading_strategy plugin's output. The old run-loop branch matched bare
+    "1007" as "API key invalid" and wedged JARVIS on a reconfiguration
+    prompt mid-conversation. The resumption handle carries the conversation
+    across a rebuild, so the cure is a calm reconnect with context.
+    Genuine key rejections carry "api key"/"unauthenticated" in the reason
+    and stay with the key branch."""
+    s = str(e)
+    if "1007" not in s:
+        return False
+    low = s.lower()
+    if "api key" in low or "unauthenticated" in low or "permission" in low:
+        return False
+    return True
+
+
 def _clean_transcript(text: str) -> str:    
     text = _CTRL_RE.sub("", text)
     text = re.sub(r"[\x00-\x08\x0b-\x1f]", "", text)
     return text.strip()
+
+
+# Tool results ride the realtime session inside send_tool_response. A 2026-10-14
+# crash started with a 1007 "Request contains an invalid argument" close right
+# after a trading_strategy response was sent back: the plugin's output is a
+# multi-KB strategy dump that can carry vendor-decoded control characters or
+# lone UTF-16 surrogates, any of which can make the payload unacceptable to the
+# Live API. Harden at the one boundary every tool passes through.
+_TOOL_RESULT_MAX_CHARS = 20000
+
+def _sanitize_tool_result(result) -> str:
+    """Make a tool result safe to send as a Live API FunctionResponse.
+
+    1. Repair lone UTF-16 surrogates (bytes decoded by vendor SDKs can carry
+       them; they cannot be encoded to a wire-safe JSON string).
+    2. Strip control characters (the transcript cleaner's rules).
+    3. Cap the size — the model reads the head of the payload; a wholesale
+       strategy dump has no business on the realtime socket.
+    """
+    s = str(result)
+    if not s:
+        return s
+    try:
+        # surrogatepass round-trip: intact text survives unchanged, lone
+        # surrogates fail the strict decode and fall back to UTF-8 'replace'.
+        s.encode("utf-16", "surrogatepass").decode("utf-16")
+    except (UnicodeDecodeError, UnicodeEncodeError):
+        s = s.encode("utf-8", "replace").decode("utf-8")
+    s = _CTRL_RE.sub("", s)
+    s = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", s)
+    if len(s) > _TOOL_RESULT_MAX_CHARS:
+        s = (s[:_TOOL_RESULT_MAX_CHARS]
+             + f"\n[...tool output truncated at {_TOOL_RESULT_MAX_CHARS} chars]")
+    return s
+
+
+# Overlap-aware assembly for the Live API output transcription.
+# The transcription stream occasionally RESTATES text it already emitted
+# (a restart / re-sync chunk). Appending naively produced verbatim doubled
+# sentences — 11 confirmed A+A rows in memory/conversations/2026-10.jsonl
+# (e.g. 2026-10-13T20:21:35, "नमस्ते बॉस, कैसे हैं आप? नमस्ते बॉस, कैसे हैं आप?").
+# The old guard only dropped a chunk identical to the immediately PRECEDING
+# chunk, so any restart re-emitting more than the last chunk still doubled
+# the turn (journal + UI + Hermes all carried the double).
+#
+# Trade-off, stated plainly: a DELIBERATE verbatim repeat of a ≥6-char
+# phrase within one turn is also merged away now. Empirically the artifact
+# (doubles) is common and deliberate verbatim repeats are not observed;
+# audio is unaffected either way — this layer only assembles the text.
+_MERGE_MIN_CHARS = 6   # below this a match is treated as new text — a false
+                       # merge would EAT real words, which is worse than a
+                       # rare duplicate, so the rules stay conservative
+
+def _collapse_doubled(text: str) -> str:
+    """If text is exactly a verbatim double (A + whitespace + A), keep A.
+
+    Catches the observed end state of a restated transcription in one step.
+    Only exact halves (whitespace-normalized) collapse; split candidates are
+    the middle ±1 because the join seam contributes 0 or 1 spaces.
+    """
+    t = re.sub(r"\s+", " ", text).strip()
+    n = len(t)
+    if n < 2 * _MERGE_MIN_CHARS:
+        return text
+    for i in (n // 2, n // 2 + 1, n // 2 - 1):
+        if i < _MERGE_MIN_CHARS or (n - i) < _MERGE_MIN_CHARS:
+            continue
+        if t[:i].strip() == t[i:].strip():
+            return t[:i].strip()
+    return text
+
+def _merge_transcript(prev: str, chunk: str) -> str:
+    """Merge one transcription chunk into the accumulated turn text.
+
+    Rules (conservative):
+      0. empty chunk → unchanged
+      1. chunk already contained verbatim in the accumulated text AND
+         ≥ _MERGE_MIN_CHARS → unchanged (covers whole-turn restatements and
+         piece-wise restarts; the caller's consecutive guard covers shorts)
+      2. chunk begins with a ≥ _MERGE_MIN_CHARS exact tail of the
+         accumulated text → append only the remainder (overlap stitch)
+      3. otherwise → append as new text
+      Every append path then runs _collapse_doubled as the final safety net.
+    """
+    if not chunk:
+        return prev
+    if not prev:
+        return chunk
+    if len(chunk) >= _MERGE_MIN_CHARS and chunk in prev:
+        return prev
+    max_ov = min(len(prev), len(chunk))
+    for ov in range(max_ov, _MERGE_MIN_CHARS - 1, -1):
+        if prev[-ov:] == chunk[:ov]:
+            return _collapse_doubled(prev + " " + chunk[ov:])
+    return _collapse_doubled(prev + " " + chunk)
 
 TOOL_DECLARATIONS = [
     # ── Inline tools ─────────────────────────────────────────────────────────
@@ -920,6 +1085,7 @@ class JarvisLive:
         # push-to-talk. Fed from the receive loop as words arrive, drained by
         # the playback loop against the audio.
         self._visemes              = VisemeStream()
+        self._last_mouth_tx        = 0.0        # RIO face WS throttle (mouth)
         self._ptt_enabled          = False
         self._ptt_held             = False
         self._ptt                  = None    # core.hotkey.PushToTalk
@@ -989,6 +1155,26 @@ class JarvisLive:
         # gateway's credentials — Jarvis never touches a chat API itself.
         self._inbound_channel: str | None = None
         self._inbound_had_file = False
+        # Monotonic timestamp of when the inbound request was actually SENT to
+        # the model. A turn that completes BEFORE this moment is an unrelated
+        # (earlier) turn and must never be delivered to the messaging channel.
+        self._inbound_req_ts = 0.0
+        # Conversation tag for the RIO chat turn currently in flight (consumed
+        # once, at the next turn_complete, by the journal — see _receive_audio).
+        # Replaces the racy set-around-send of the module-global journal stamp,
+        # which never survived long enough to reach the journal write.
+        self._pending_conv = ""
+        # Desktop HUD direct-path duplicate latch (double-Enter / double-click
+        # on send): identical text within the window is dropped.
+        self._last_direct_text: str | None = None
+        self._last_direct_ts = 0.0
+        # Per-request response lifecycle tracking (core/response_state.py).
+        self._active_req_id = ""          # correlation id of the in-flight turn
+        self._last_req_id  = ""           # last completed id (audio tracking)
+        # Set at every turn_complete; the dashboard command loop waits on it
+        # so one message is fully answered before the next is generated —
+        # this is what keeps reply routing per-message instead of per-slot.
+        self._dash_turn_done = asyncio.Event()
         self._dashboard     = None
         self._briefing_sent    = False          # morning briefing fires once per process
         self._sys_monitor      = SystemMonitor()  # persistent cooldown state
@@ -1075,7 +1261,7 @@ class JarvisLive:
         print(f"[JARVIS] 👂 WAKE — {reason}")   # stdout proof: wake word fired
         self._last_user_speech = time.monotonic()   # start the auto-sleep clock now
         if not self.ui.muted:
-            self.ui.set_state("LISTENING")
+            self._face_state("LISTENING")
         self.ui.write_log(f"SYS: Awake — {reason}.")
 
     def sleep(self, reason: str = "timeout") -> None:
@@ -1083,7 +1269,7 @@ class JarvisLive:
             return
         self._awake = False
         self.set_speaking(False)
-        self.ui.set_state("SLEEPING")
+        self._face_state("SLEEPING")
         self.ui.write_log(f"SYS: Sleeping — {reason}. Say 'Hey Jarvis' to wake me.")
 
     async def _run_sleep_watch(self) -> None:
@@ -1325,6 +1511,19 @@ class JarvisLive:
         return url, key, f"{url}/auto-login?key={key}", manual
 
     def _on_text_command(self, text: str):
+        text = (text or "").strip()
+        if not text:
+            return
+        # Duplicate-submit guard for the direct HUD path (this bypasses the
+        # dashboard queue, so the intake dedup cannot see it): an identical
+        # text within 1.5 s is a double-Enter / double-click, not a new
+        # question. Different text always passes.
+        now = time.monotonic()
+        if text == self._last_direct_text and (now - self._last_direct_ts) < 1.5:
+            print("[JARVIS] dedup: duplicate direct text within 1.5 s — dropped")
+            return
+        self._last_direct_text = text
+        self._last_direct_ts = now
         if not self._loop or not self.session:
             return
         # Respect wake-word sleep: a typed command must not be answered while
@@ -1361,9 +1560,38 @@ class JarvisLive:
             # still needs it to recognise our own voice.
             self._out_level = 0.0
         if value:
-            self.ui.set_state("SPEAKING")
+            self._face_state("SPEAKING")
         elif not self.ui.muted:
-            self.ui.set_state("LISTENING")
+            self._face_state("LISTENING")
+
+    def _face_state(self, name: str) -> None:
+        """Drive the HUD state AND the RIO 3D face over the dashboard WS
+        (transient frames — never recorded in the WS replay history). The
+        face maps: SPEAKING → yellow glow + lip-sync, THINKING/WORKING →
+        orange, LISTENING → blue, SLEEPING → dim, MUTED → gray."""
+        self.ui.set_state(name)
+        if self._dashboard is not None:
+            try:
+                asyncio.create_task(self._dashboard.broadcast_transient(
+                    {"type": "assist_state", "state": name,
+                     "ts": time.time()}))
+            except Exception:
+                pass  # a dead dashboard must never break the audio path
+
+    def set_mic_muted(self, muted: bool) -> str:
+        """Mic mute from the RIO UI (Home / Chat mute buttons) — the SAME
+        switch the HUD mute button flips. `ui.muted` gates the PC mic in the
+        audio callback (main.py ~2041), so a muted assistant stops SENDING
+        your voice to the live session; replies already playing finish.
+        Session-scoped: restarts unmute, exactly like the HUD."""
+        self.ui.muted = bool(muted)
+        self.ui.write_log("SYS: Microphone muted."
+                          if muted else "SYS: Microphone live.")
+        try:
+            self._face_state("MUTED" if muted else "LISTENING")
+        except Exception:
+            pass
+        return "session (live immediately)"
 
     def set_push_to_talk(self, enabled: bool) -> str:
         """Turn hold-to-talk on or off. Returns the scope actually achieved."""
@@ -1401,7 +1629,7 @@ class JarvisLive:
                 self._awake = True
                 self._last_user_speech = time.monotonic()
         try:
-            self.ui.set_state("LISTENING" if held else "SLEEPING")
+            self._face_state("LISTENING" if held else "SLEEPING")
         except Exception:
             pass
 
@@ -1480,14 +1708,25 @@ class JarvisLive:
         journal_ctx = ""
         if not self._resume_handle and not self._carry_context:
             try:
-                from memory.conversation_journal import recent_journal_tail
+                from memory.conversation_journal import (recent_journal_tail,
+                                                         last_user_request)
                 _tail = recent_journal_tail(max_chars=1200)
                 if _tail:
+                    # Anchor the resume on what the user actually asked last —
+                    # alerts/monitors are filtered out of _tail, and this line
+                    # states the dropped-in-the-middle-of task outright so the
+                    # model continues it instead of merely sounding informed.
+                    _last = last_user_request()
+                    _anchor = (
+                        f"The user's most recent request was: {_last}\n"
+                        "Continue from exactly there — do not start over.\n\n"
+                        if _last else "")
                     journal_ctx = (
                         "[CONVERSATION RESUMED]\n"
                         "This assistant process restarted. Your recent past "
                         "exchanges with the user, oldest first:\n\n"
-                        + _tail + "\n\nDo NOT re-greet or reintroduce yourself. "
+                        + _tail + "\n\n" + _anchor
+                        + "Do NOT re-greet or reintroduce yourself. "
                         "Continue naturally; you may reference these only if "
                         "the user brings them up.\n\n"
                     )
@@ -1647,7 +1886,7 @@ class JarvisLive:
         args = dict(fc.args or {})
 
         print(f"[JARVIS] 🔧 {name}  {args}")
-        self.ui.set_state("THINKING")
+        self._face_state("THINKING")
 
         if name == "save_memory":
             category = args.get("category", "notes")
@@ -1657,7 +1896,7 @@ class JarvisLive:
                 update_memory({category: {key: {"value": value}}})
                 print(f"[Memory] 💾 save_memory: {category}/{key} = {value}")
             if not self.ui.muted:
-                self.ui.set_state("LISTENING")
+                self._face_state("LISTENING")
             return types.FunctionResponse(
                 id=fc.id, name=name,
                 response={"result": "ok", "silent": True}
@@ -1802,12 +2041,12 @@ class JarvisLive:
             self.speak_error(name, e)
 
         if not self.ui.muted:
-            self.ui.set_state("LISTENING")
+            self._face_state("LISTENING")
 
         print(f"[JARVIS] 📤 {name} → {str(result)[:80]}")
         return types.FunctionResponse(
             id=fc.id, name=name,
-            response={"result": result}
+            response={"result": _sanitize_tool_result(result)}
         )
 
     async def _send_realtime(self):
@@ -1991,7 +2230,8 @@ class JarvisLive:
 
     async def _receive_audio(self):
         print("[JARVIS] 👂 Recv started")
-        out_buf, in_buf = [], []
+        out_text, in_buf = "", []      # out_text: overlap-aware merged transcript
+        out_last = ""                  # last raw chunk (consecutive-repeat guard)
 
         try:
             while True:
@@ -2072,12 +2312,19 @@ class JarvisLive:
 
                         if sc.output_transcription and sc.output_transcription.text:
                             txt = _clean_transcript(sc.output_transcription.text)
-                            if txt and txt != (out_buf[-1] if out_buf else ""):
-                                out_buf.append(txt)
-                                # Hand the words to the mouth as they arrive, so
-                                # the avatar can form the consonants the audio
-                                # alone cannot show (Mark-LIV).
-                                self._visemes.feed_text(txt)
+                            if txt and txt != out_last:
+                                # Overlap-aware merge: restart / re-sync chunks
+                                # that restate already-transcribed words are
+                                # stitched, not appended (see _merge_transcript).
+                                merged = _merge_transcript(out_text, txt)
+                                if len(merged) > len(out_text):
+                                    # Hand only the NEW words to the mouth, so
+                                    # the avatar forms consonants for speech it
+                                    # has not already lip-synced (Mark-LIV).
+                                    self._visemes.feed_text(
+                                        merged[len(out_text):].lstrip())
+                                out_text = merged
+                            out_last = txt
 
                         if sc.input_transcription and sc.input_transcription.text:
                             txt = _clean_transcript(sc.input_transcription.text)
@@ -2089,24 +2336,34 @@ class JarvisLive:
                             if self._turn_done_event:
                                 self._turn_done_event.set()
 
-                            # Deferred GoAway reconnect — the turn just ended,
-                            # so this is a clean cut point (see the go_away block
-                            # above for why the client must close first).
-                            if self._goaway_pending:
-                                self._goaway_pending = False
-                                print("[JARVIS] 🔔 Turn finished — reconnecting before the connection rotates")
-                                self.ui.write_log("SYS: Connection rotation — continuing the same conversation.")
-                                raise _ReconnectSignal(keep_context=True)
-
                             # If this turn_complete ends an interrupted response, clear the
                             # flag and skip all further processing for that turn.
                             if self._interrupted:
                                 self._interrupted = False
                                 in_buf  = []
-                                out_buf = []
+                                out_text, out_last = "", ""
+                                # An interrupted turn still ends the turn the
+                                # command loop may be waiting on (Stop button,
+                                # barge-in) — release it, or the next queued
+                                # message would wait out the full timeout.
+                                self._dash_turn_done.set()
+                                if self._active_req_id:
+                                    _resp_tracker().update(
+                                        self._active_req_id, _RS_CANCELLED,
+                                        error="interrupted by user")
+                                    self._active_req_id = ""
+                                self._pending_conv = ""
+                                # The messaging request mid-answer will never
+                                # get its reply now — notify its chat once
+                                # instead of leaving permanent silence (and a
+                                # stale slot that would misroute the next
+                                # voice answer).
+                                if self._inbound_channel:
+                                    self._notify_inbound_lost("interrupted")
                                 continue
 
                             full_in = " ".join(in_buf).strip()
+                            _turn_conv = (self._pending_conv or "").strip() or None
                             if full_in:
                                 self.ui.write_log(f"You: {full_in}")
                                 self._session_log.append(f"User: {full_in}")
@@ -2117,8 +2374,13 @@ class JarvisLive:
                                 if self._conversation_started is None:
                                     self._conversation_started = time.monotonic()
                                 # Verbatim journal — the never-forgets layer.
+                                # The RIO conversation tag travels with THIS
+                                # turn explicitly (consumed once below); the
+                                # old set-around-send of the module global
+                                # always lost the race with the executor and
+                                # no row was ever stamped.
                                 asyncio.get_event_loop().run_in_executor(
-                                    None, append_turn, "user", full_in)
+                                    None, append_turn, "user", full_in, _turn_conv)
                                 if self._dashboard:
                                     asyncio.create_task(self._dashboard.broadcast({
                                         "type": "log", "speaker": "user",
@@ -2127,25 +2389,63 @@ class JarvisLive:
                                     }))
                             in_buf = []
 
-                            full_out = " ".join(out_buf).strip()
+                            full_out = out_text.strip()
                             if full_out:
                                 self.ui.write_log(f"{self._asst_name}: {full_out}")
                                 self._session_log.append(f"{self._asst_name}: {full_out}")
                                 # Verbatim journal — the never-forgets layer.
                                 asyncio.get_event_loop().run_in_executor(
-                                    None, append_turn, "jarvis", full_out)
+                                    None, append_turn, "jarvis", full_out, _turn_conv)
                                 # Hermes bridge: this answer was for a Telegram/
                                 # WhatsApp message → deliver it back on the SAME
-                                # channel it came from (spec §8/§11).
+                                # channel it came from (spec §8/§11). The reply
+                                # gate makes sure it is THIS turn's answer: a
+                                # turn that completed before the request was
+                                # even sent (interleaved voice, replay after
+                                # resume) must not be delivered to the chat.
                                 if self._inbound_channel:
-                                    asyncio.create_task(self._hermes_reply(full_out))
+                                    if time.monotonic() >= self._inbound_req_ts:
+                                        asyncio.create_task(self._hermes_reply(full_out))
+                                    else:
+                                        print(f"[Hermes] reply gate: pre-request "
+                                              f"turn not delivered to {self._inbound_channel}")
                                 if self._dashboard:
                                     asyncio.create_task(self._dashboard.broadcast({
                                         "type": "log", "speaker": "jarvis",
                                         "text": full_out,
                                         "ts": datetime.now().isoformat(),
                                     }))
-                            out_buf = []
+                            elif self._inbound_channel and time.monotonic() >= self._inbound_req_ts:
+                                # Empty answer for a pending messaging request:
+                                # the user would get silence forever. One
+                                # honest failure notice (no auto-retry — that
+                                # could double-process the request).
+                                print("[Hermes] ⚠️ turn completed with no answer — "
+                                      "sending failure notice")
+                                asyncio.create_task(self._hermes_reply(
+                                    "I couldn't generate a reply just now — "
+                                    "please send that again."))
+                                if self._active_req_id:
+                                    _resp_tracker().update(
+                                        self._active_req_id, FAILED,
+                                        finish="none", error="empty model response")
+                                    self._active_req_id = ""
+                            out_text, out_last = "", ""
+
+                            # Turn lifecycle: the dashboard/bridge request that
+                            # produced this turn is now complete (spoken audio
+                            # is tracked separately by the play loop).
+                            if self._active_req_id:
+                                _resp_tracker().update(
+                                    self._active_req_id, _RS_COMPLETED,
+                                    finish="turn_complete")
+                                self._last_req_id = self._active_req_id
+                                self._active_req_id = ""
+                            # This turn is fully answered — release the next
+                            # queued dashboard/bridge command, and scope the
+                            # conversation tag to exactly this turn.
+                            self._dash_turn_done.set()
+                            self._pending_conv = ""
 
                             # Vision injection: model finished tool-response turn → now send the image
                             if self._pending_vision and self.session:
@@ -2178,6 +2478,20 @@ class JarvisLive:
                                     self.ui.stop_camera_stream()
                                 asyncio.create_task(_cam_close())
 
+                            # Deferred GoAway reconnect — the turn just ended AND
+                            # its bookkeeping (journal, reply, broadcast, vision
+                            # follow-up) is done, so this is a clean cut point
+                            # (see the go_away block above for why the client must
+                            # close first). Raising any earlier cancelled the
+                            # playback mid-sentence and threw away the
+                            # just-finished turn's journal row, UI broadcast and
+                            # Hermes reply.
+                            if self._goaway_pending:
+                                self._goaway_pending = False
+                                print("[JARVIS] 🔔 Turn finished — reconnecting before the connection rotates")
+                                self.ui.write_log("SYS: Connection rotation — continuing the same conversation.")
+                                raise _ReconnectSignal(keep_context=True)
+
                     if response.tool_call:
                         fn_responses = []
                         for fc in response.tool_call.function_calls:
@@ -2202,6 +2516,25 @@ class JarvisLive:
                 # owns the recovery when the server cuts first.)
                 print("[JARVIS] 🔔 Session limit reached — refreshing connection")
                 self.ui.write_log("SYS: Session limit reached — refreshing connection.")
+                raise _ReconnectSignal(keep_context=True) from e
+            if getattr(self, "_shutting_down", False):
+                # We are closing the session as part of window-close teardown
+                # — the server's 1000 close landing as APIError 1000 inside
+                # receive() is EXPECTED. Log a one-liner, don't traceback.
+                print(f"[JARVIS] 👂 Recv ended (shutdown): {type(e).__name__}")
+                raise
+            if _is_transient_server_error(e):
+                # 1011 internal error — Google-side hiccup; the run loop's
+                # 3 s reconnect + resumption handle restore the conversation
+                # (verified 2026-10-13). One calm line, no traceback noise.
+                print(f"[JARVIS] 🔔 Server hiccup ({getattr(e, 'code', '?')}) — reconnecting")
+                raise
+            if _is_invalid_argument_close(e):
+                # 1007 invalid argument — OUR request was rejected (e.g. a
+                # tool response the server would not accept). The session is
+                # fine server-side; rebuild with the resumption handle. One
+                # calm line — a traceback here taught nothing (2026-10-14).
+                print("[JARVIS] 🔔 Request rejected (1007 invalid argument) — reconnecting")
                 raise _ReconnectSignal(keep_context=True) from e
             print(f"[JARVIS] ❌ Recv: {e}")
             traceback.print_exc()
@@ -2255,6 +2588,7 @@ class JarvisLive:
         except Exception:
             pass
 
+        _write_task = None   # the in-flight stream.write executor task, if any
         try:
             while True:
                 try:
@@ -2270,6 +2604,12 @@ class JarvisLive:
                     ):
                         self.set_speaking(False)
                         self._turn_done_event.clear()
+                        # Voice playback for the last answered turn is now
+                        # fully played — tracked separately from the text
+                        # state (completed text never implies completed audio).
+                        if self._last_req_id:
+                            _resp_tracker().mark_spoken(self._last_req_id)
+                            self._last_req_id = ""
                     continue
 
                 self.set_speaking(True)
@@ -2312,6 +2652,19 @@ class JarvisLive:
                     if frames:
                         frames = self._visemes.frames(frames, hop)
                         self.ui.push_visemes(frames, hop, at)
+                        # RIO 3D face: real lip-sync. The viseme level IS the
+                        # mouth — throttled to ~11 Hz over the dashboard's
+                        # transient WS fan-out (never in the replay history).
+                        now_tx = time.time()
+                        if (self._dashboard is not None
+                                and now_tx - self._last_mouth_tx >= 0.09):
+                            self._last_mouth_tx = now_tx
+                            lvl = max(f[0] for f in frames)
+                            asyncio.create_task(
+                                self._dashboard.broadcast_transient(
+                                    {"type": "mouth",
+                                     "lvl": round(float(min(1.0, lvl * 3.0)), 3),
+                                     "ts": now_tx}))
                         # Barge-in needs to know what we are playing, not just
                         # how loud: the guard subtracts this from the mic.
                         self._out_level = max(f[0] for f in frames)
@@ -2353,32 +2706,65 @@ class JarvisLive:
                 try:
                     # ALSA writes block while the device is wedged; without a
                     # timeout the play loop would hang forever with no log.
+                    # The write runs as a tracked task: two writes must never
+                    # overlap on one native stream (the previous stalled one
+                    # is waited out before a new batch starts), and the
+                    # teardown below must never close the stream under one.
+                    if _write_task is not None and not _write_task.done():
+                        try:
+                            await asyncio.wait_for(
+                                asyncio.shield(_write_task), timeout=1.0)
+                        except Exception:
+                            pass   # TimeoutError — still wedged; drop this batch
+                        if not _write_task.done():
+                            continue   # wedged — drop this batch, keep looping
+                    _write_task = asyncio.create_task(
+                        asyncio.to_thread(stream.write, bytes(batch))
+                    )
                     await asyncio.wait_for(
-                        asyncio.to_thread(stream.write, bytes(batch)),
-                        timeout=10,
+                        asyncio.shield(_write_task), timeout=10,
                     )
                 except asyncio.TimeoutError:
                     print("[JARVIS] ⚠️ Speaker write stalled >10 s — audio device may be wedged")
-                except (RuntimeError, asyncio.CancelledError):
-                    break   # executor shutting down — exit cleanly
+                except RuntimeError:
+                    break   # stream/executor gone — exit cleanly
         except Exception as e:
             print(f"[JARVIS] ❌ Play: {e}")
             raise
         finally:
             self.set_speaking(False)
-            stream.stop()
-            stream.close()
+            # 2026-10-14 malloc abort: the session's death cancelled this task
+            # mid-write, and the old teardown called stop()/close() while an
+            # executor thread was still inside stream.write() — concurrent
+            # access to one native PortAudio stream corrupts the heap. Wait
+            # out the in-flight write (bounded), THEN close, and never raise
+            # from teardown.
+            if _write_task is not None and not _write_task.done():
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(_write_task), timeout=3.0)
+                except (Exception, asyncio.CancelledError):
+                    print("[JARVIS] ⚠️ Speaker write still in flight at close — dropping")
+            try:
+                stream.stop()
+                stream.close()
+            except Exception as _te:
+                print(f"[JARVIS] ⚠️ Speaker teardown: {_te}")
 
     def _mirror_phone_audio(self, pcm: bytes) -> None:
         """Queue a PCM batch for the phone dashboard's audio player.
         Called from the play loop; never blocks, never raises."""
         try:
-            self._dashboard._phone_audio_q.put_nowait(pcm)
+            # NOTE: the attribute is `_phone_audio_queue` (dashboard/server.py).
+            # It was `_phone_audio_q` here for months — an AttributeError the
+            # caller's `except Exception: pass` swallowed, so the phone never
+            # heard the reply audio.
+            self._dashboard._phone_audio_queue.put_nowait(pcm)
         except asyncio.QueueFull:
             # Phone tab gone/stalled — drop rather than grow unbounded.
             try:
-                self._dashboard._phone_audio_q.get_nowait()
-                self._dashboard._phone_audio_q.put_nowait(pcm)
+                self._dashboard._phone_audio_queue.get_nowait()
+                self._dashboard._phone_audio_queue.put_nowait(pcm)
             except Exception:
                 pass
 
@@ -2632,13 +3018,18 @@ class JarvisLive:
         except Exception as e:
             print(f"[Memory] ⚠️ Session summary failed: {e}")
 
-        # Evolution: once enough lived history has accumulated, let a
-        # background consolidation refresh the curated memory so it drifts
-        # with the person instead of freezing at first impressions.
-        try:
-            await asyncio.to_thread(maybe_evolve)
-        except Exception as _evo:
-            print(f"[Evolution] ⚠️ post-session pass failed: {_evo}")
+    async def _evolve_memory_pass(self) -> str | None:
+        """One bounded Evolution consolidation pass.
+
+        Runs OUTSIDE the summary's shutdown budget: graceful_shutdown's 5s
+        wait_for covers only the summary LLM call, so the ~80s consolidation
+        (2026-10-12 observation, ~6000 journal turns) can never fall inside
+        step 3 and delay the exit. Once this coroutine returns, the whole
+        pass — including maybe_evolve's own gate commit — has durably
+        finished on disk, which is why it is awaited before the process
+        exits rather than fire-and-forgotten.
+        """
+        return maybe_evolve()
 
     # ── System monitor ──────────────────────────────────────────────────────────
 
@@ -3039,57 +3430,177 @@ class JarvisLive:
             print(f"[Hermes] ⚠️ send error: {e}")
             return False
 
-    async def _hermes_reply(self, text: str) -> None:
+    async def _hermes_reply(self, text: str, target: str | None = None) -> None:
         """Deliver the answer to the channel the inbound message came from,
-        then clear the bridge state."""
-        channel = self._inbound_channel
+        then clear the bridge state. `target` overrides the slot (used by the
+        lost-reply notifier, which captures the channel before clearing it)."""
+        channel = target or self._inbound_channel
+        rid = self._active_req_id
         self._inbound_channel = None
         self._inbound_had_file = False
+        self._inbound_req_ts = 0.0
         if not channel:
             return
-        await asyncio.to_thread(self._hermes_send, text, channel)
+        # Phase 7 · bridge pipeline events: the answer exists (generated)
+        # and then the real delivery verdict — True only when the channel
+        # confirmed. Never raises into the reply path.
+        try:
+            from dashboard.hermes_events import emit as _emit_event
+            _emit_event(self._dashboard, "response_generated",
+                        channel=channel, chars=len(text))
+        except Exception:
+            pass
+        ok = await asyncio.to_thread(self._hermes_send, text, channel)
+        if rid:
+            print(f"[REQ {rid}] DELIVERED ok={str(bool(ok)).lower()} "
+                  f"channel={channel}")
+        try:
+            from dashboard.hermes_events import emit as _emit_event
+            _emit_event(self._dashboard, "response_sent", channel=channel,
+                        ok=bool(ok),
+                        detail=("delivered" if ok
+                                else "delivery failed — see logs"))
+        except Exception:
+            pass
+
+    def _notify_inbound_lost(self, reason: str) -> None:
+        """A pending messaging-channel request will never get its answer (the
+        turn was interrupted or lost to a reconnect). Clear the slot and send
+        ONE honest failure notice — permanent silence was the failure mode
+        this replaces, and a stale slot would misroute the NEXT voice answer
+        to the chat. Never raises; safe from any async context."""
+        channel = self._inbound_channel
+        if not channel:
+            return
+        self._inbound_channel = None
+        self._inbound_had_file = False
+        self._inbound_req_ts = 0.0
+        print(f"[Hermes] ⚠️ pending reply lost ({reason}) — notifying {channel}")
+        if self._active_req_id:
+            _resp_tracker().update(self._active_req_id, _RS_FAILED,
+                                   error=f"reply lost: {reason}")
+            self._active_req_id = ""
+        try:
+            asyncio.get_event_loop().create_task(self._hermes_reply(
+                "⚠️ I was interrupted before I could reply — please send "
+                "that again.", target=channel))
+        except Exception:
+            pass
+
+    async def _wait_session_ready(self, timeout_s: float) -> bool:
+        """Bounded wait for the Live session to (re)appear. True when ready.
+        Kept as its own method so the dashboard command loop stays readable
+        and tests can shrink the wait via _CMD_SESSION_WAIT_S."""
+        deadline = time.monotonic() + max(0.0, float(timeout_s))
+        while time.monotonic() < deadline:
+            if self.session:
+                return True
+            await asyncio.sleep(0.1)
+        return bool(self.session)
 
     async def _process_dashboard_commands(self) -> None:
+        # One message at a time: after sending a command, wait for its answer
+        # turn to complete before the next queued command is generated.
+        # WITHOUT this, a second message from another channel overwrote the
+        # single inbound-reply slot and the first answer went to the wrong
+        # chat (or nowhere). The wait is bounded — a wedged turn releases the
+        # loop after the timeout, so the queue can never deadlock.
         while True:
             try:
-                text = await asyncio.wait_for(
+                item = await asyncio.wait_for(
                     self._dashboard._command_queue.get(), timeout=0.5
                 )
+                # Element shapes: plain string (phone app, bridge, TradingView),
+                # (text, conv_id) tuple (RIO chat), or a requeued
+                # [text, conv_tag, tries] list (see the no-session path below).
+                tries = 0
+                if isinstance(item, list):
+                    text, conv_tag, tries = item
+                elif isinstance(item, tuple):
+                    text, conv_tag = item[0], item[1]
+                else:
+                    text, conv_tag = item, ""
                 if not text:
                     continue
-                # Wait up to 8s for session to become ready after a wake
-                for _ in range(80):
-                    if self.session:
-                        break
-                    await asyncio.sleep(0.1)
-                if self.session:
-                    # Hermes bridge: detect a normalized inbound message and
-                    # remember where to send the answer (cleared on reply).
-                    channel, body, file_path = self._parse_inbound(text)
-                    if channel:
-                        self._inbound_channel = channel
-                        self._inbound_had_file = bool(file_path)
-                        # The model must know the file's local path so the
-                        # knowledge_base / file_processor tools can act on it.
-                        text = (f"{body}\n[Saved file: {file_path}]"
-                                if file_path else body)
-                        self.ui.write_log(f"[Hermes:{channel}] {body[:80]}")
-                    # A remote command is deliberate control and the phone user
-                    # has no desktop WAKE button — so it wakes JARVIS if asleep.
-                    if self._wake_enabled and not self._awake:
-                        self.wake(reason="remote command")
-                    await self.session.send_client_content(
-                        turns={"role": "user", "parts": [{"text": text}]},
-                        turn_complete=True,
-                    )
-                    if not channel:
-                        self.ui.write_log(f"[Web]: {text}")
-                else:
-                    print(f"[Dashboard] Dropped command (no session): {text}")
+                # Response lifecycle: every command gets a correlation id and
+                # a state trail in the log (core/response_state.py).
+                rid = _resp_tracker().start(
+                    channel=(self._parse_inbound(text)[0] or "dashboard"),
+                    source="command queue")
+                _resp_tracker().update(rid, _RS_PROCESSING)
+                # Wait (bounded) for the session to become ready after a wake
+                # or a reconnect. Module constants so tests can shrink them.
+                if not await self._wait_session_ready(_CMD_SESSION_WAIT_S):
+                    # Session down (long reconnect). Silently dropping the
+                    # message lost user input; requeue at the BACK, bounded,
+                    # so a real outage can neither loop forever nor grow the
+                    # queue unbounded.
+                    if tries < _CMD_MAX_REQUEUES:
+                        self._dashboard._command_queue.put_nowait(
+                            [text, conv_tag, tries + 1])
+                        print(f"[Dashboard] no session — requeued "
+                              f"({tries + 1}/{_CMD_MAX_REQUEUES})")
+                    else:
+                        print(f"[Dashboard] dropped command after "
+                              f"{tries} requeues (session down)")
+                        _resp_tracker().update(rid, _RS_FAILED,
+                                               error="session unavailable")
+                    continue
+                # Hermes bridge: detect a normalized inbound message and
+                # remember where to send the answer (cleared on reply).
+                channel, body, file_path = self._parse_inbound(text)
+                if channel:
+                    self._inbound_channel = channel
+                    self._inbound_had_file = bool(file_path)
+                    # The model must know the file's local path so the
+                    # knowledge_base / file_processor tools can act on it.
+                    text = (f"{body}\n[Saved file: {file_path}]"
+                            if file_path else body)
+                    self.ui.write_log(f"[Hermes:{channel}] {body[:80]}")
+                # A remote command is deliberate control and the phone user
+                # has no desktop WAKE button — so it wakes JARVIS if asleep.
+                if self._wake_enabled and not self._awake:
+                    self.wake(reason="remote command")
+                # Conversation tag rides with THIS turn only; the journal
+                # consumes it at the next turn_complete (see _receive_audio).
+                # The old set-around-send of the journal's module global
+                # always lost the race with the executor — no row was ever
+                # stamped with a conversation id.
+                self._pending_conv = conv_tag
+                self._active_req_id = rid
+                self._dash_turn_done.clear()
+                # Reply gate timestamp: only a turn that completes AFTER this
+                # moment may be delivered to the messaging channel.
+                self._inbound_req_ts = time.monotonic()
+                _resp_tracker().update(rid, _RS_GENERATING, model="gemini-live")
+                await self.session.send_client_content(
+                    turns={"role": "user", "parts": [{"text": text}]},
+                    turn_complete=True,
+                )
+                if not channel:
+                    self.ui.write_log(f"[Web]: {text}")
+                # One message, one answer: hold the queue until this turn's
+                # bookkeeping (journal, broadcast, channel reply) is done.
+                try:
+                    await asyncio.wait_for(
+                        self._dash_turn_done.wait(), timeout=_CMD_TURN_WAIT_S)
+                except asyncio.TimeoutError:
+                    print("[Dashboard] ⚠️ turn wait timeout — proceeding with "
+                          "the next queued command")
+                    _resp_tracker().update(rid, _RS_COMPLETED,
+                                           finish="wait_timeout")
+                    self._pending_conv = ""
+                    self._active_req_id = ""
             except asyncio.TimeoutError:
                 pass
+            except asyncio.CancelledError:
+                raise      # never swallow cancellation (shutdown safety)
             except Exception as e:
                 print(f"[Dashboard] Command error: {e}")
+                if self._active_req_id:
+                    _resp_tracker().update(self._active_req_id, _RS_FAILED,
+                                           error=str(e)[:120])
+                    self._active_req_id = ""
                 await asyncio.sleep(0.5)
 
     # ── main loop ───────────────────────────────────────────────────────────
@@ -3172,6 +3683,9 @@ class JarvisLive:
             self._dashboard.set_phone_mic_callback(self._on_phone_mic_state)
             # Mark-LIV: the phone's settings panel can toggle push-to-talk.
             self._dashboard.set_ptt_callback(self.set_push_to_talk)
+            # RIO Home/Chat mute buttons — same ui.muted gate as the HUD.
+            self._dashboard.set_mute_callback(self.set_mic_muted,
+                                              lambda: bool(self.ui.muted))
             asyncio.create_task(self._dashboard.serve())
             # Runs for the whole lifetime, not just inside an active session
             asyncio.create_task(self._process_dashboard_commands())
@@ -3225,6 +3739,13 @@ class JarvisLive:
                     self._interrupted          = False
                     self._goaway_pending       = False
                     self._goaway_deadline      = 0.0
+                    # A messaging request whose answer turn was lost to this
+                    # reconnect must not silently bind its reply to the next
+                    # unrelated voice answer — and its chat must not wait
+                    # forever. Clear the slot, notify the chat once.
+                    if self._inbound_channel:
+                        self._notify_inbound_lost("reconnect")
+                    self._pending_conv = ""
 
                     print("[JARVIS] Connected.")
                     # Backoff exists to survive outages — once we are actually
@@ -3254,11 +3775,11 @@ class JarvisLive:
                         self._ensure_wake_detector()
                         self._awake = False
                         self.ui.set_state("SLEEPING")
-                        self.ui.write_log("SYS: JARVIS online — sleeping. Say 'Hey Jarvis' to wake me.")
+                        self.ui.write_log("SYS: RIO online — sleeping. Say 'Hey Jarvis' to wake me.")
                     else:
                         self._awake = True
                         self.ui.set_state("LISTENING")
-                        self.ui.write_log("SYS: JARVIS online.")
+                        self.ui.write_log("SYS: RIO online.")
 
                     if self._dashboard:
                         await self._dashboard.broadcast({"type": "status", "state": "active"})
@@ -3288,7 +3809,18 @@ class JarvisLive:
                         tg.create_task(self._send_startup_briefing())
 
             except KeyboardInterrupt:
-                raise
+                # SIGINT lands on the runner thread at an arbitrary await.
+                # Raising it out of run() lets asyncio.run() tear the loop
+                # down while the dashboard is STILL serving — handlers then
+                # schedule on the dead default executor and the executor-
+                # crash guard turns a plain Ctrl+C into SystemExit(1):
+                # systemd (Restart=on-failure) resurrects the app (observed
+                # 2026-10-12). Handle it HERE instead, inside the loop, where
+                # the dashboard can be stopped BEFORE the executor dies —
+                # exactly the window-close pipeline, same one-shot guard.
+                print("\n🔴 Shutting down (Ctrl+C)…")
+                await self.graceful_shutdown("sigint")
+                return
             except SystemExit:
                 raise
             except BaseException as e:
@@ -3417,7 +3949,17 @@ class JarvisLive:
                 # prompting for a new key that would then be the 7th of 7 is
                 # a dead end. Only when every key has been tried does the
                 # reconfiguration prompt fire.
-                if "API key not valid" in err_str or "1007" in err_str:
+                # 2026-10-14: bare "1007" was REMOVED from this branch — a
+                # 1007 "Request contains an invalid argument" is a rejected
+                # request (e.g. a bad tool-response payload), not a key
+                # problem, and prompting for reconfiguration mid-conversation
+                # wedged the assistant for a full tool cycle. 1007s that are
+                # genuinely about the key carry "api key"/"unauthenticated"
+                # in the reason and still land here; every other 1007 is
+                # handled above as an invalid-argument reconnect.
+                if ("API key not valid" in err_str
+                        or "unauthenticated" in err_str.lower()
+                        or ("1007" in err_str and "api key" in err_str.lower())):
                     if _rotate_api_key():
                         print(f"[JARVIS] 🔑 Key rejected — rotating to key #{_gemini_key_index % max(1, len(_load_gemini_keys()))}")
                         self.ui.write_log("SYS: API key rejected — switching to the next configured key.")
@@ -3515,7 +4057,13 @@ class JarvisLive:
                 # list races the next session's appends and can silently
                 # discard the first turns of the fresh conversation.
                 if len(self._session_log) >= 3:
-                    asyncio.create_task(self._save_session_summary())
+                    async def _post_session():
+                        await self._save_session_summary()
+                        try:
+                            await self._evolve_memory_pass()
+                        except Exception as _evo:
+                            print(f"[Evolution] ⚠️ post-session pass failed: {_evo}")
+                    asyncio.create_task(_post_session())
                 self._session_log = []
 
             self.set_speaking(False)
@@ -3528,8 +4076,265 @@ class JarvisLive:
             print(f"[JARVIS] Reconnecting in {delay}s...")
             await asyncio.sleep(delay)
 
+    # ── window-close shutdown (Objective: close RIO ⇒ close the app) ────────
+    # Closing the RIO desktop window is the user's stop button for the whole
+    # assistant. Stages, in the app's own lifecycle order:
+    #   1. stop accepting input (dashboard intake + voice)
+    #   2. cancel the session TaskGroup workers (audio, camera, monitors,
+    #      proactive, trading-learner, market desk — each already handles
+    #      CancelledError per its own reconnect/exit contract)
+    #   3. flush the conversation journal + save the session summary
+    #   4. stop the dashboard server (uvicorn :8000 + :8001 alias)
+    #   5. close the RIO window process group (owned via its profile dir)
+    #   6. bounded wait → exit 0 (so systemd Restart=on-failure does NOT
+    #      resurrect a deliberately closed app; crashes still restart)
+    async def _dashboard_shutdown(self) -> None:
+        """Signal uvicorn (both servers) to exit their serve() loops."""
+        import uvicorn as _uv
+        from dashboard.server import DashboardServer as _DS
+        d = self._dashboard
+        # The class registry holds the servers started in serve(); ask uvicorn
+        # for a graceful exit via its should_exit flag (documented control).
+        for srv in [_DS.live, d]:
+            pass
+        # uvicorn Server instances are reachable via the running event loop's
+        # tasks — signal any uvicorn.Server to stop.
+        loop = asyncio.get_running_loop()
+        for t in asyncio.all_tasks(loop):
+            cb = getattr(t, "get_coro", None)
+            coro = cb() if cb else None
+            name = f"{coro.__name__ if coro else ''}"
+            if "serve" in name.lower():
+                t.cancel()
+
+    # One-shot + idempotent: a second trigger can never restart the pipeline.
+    async def graceful_shutdown(self, stage_name: str = "window") -> None:
+        if getattr(self, "_shutting_down", False):
+            return
+        self._shutting_down = True
+        _SHUTDOWN_TIMEOUT_S = 8.0
+        print(f"[JARVIS] 🔻 Graceful shutdown ({stage_name}) — stopping workers…")
+
+        # 1) no new inputs
+        self._quit = True
+        try:
+            if self._dashboard is not None:
+                self._dashboard._wake_callback = None
+        except Exception:
+            pass
+
+        # 2) session TaskGroup workers + live session
+        try:
+            if self.session is not None:
+                await self.session.close()
+        except Exception:
+            pass
+        self.session = None
+
+        # 3) flush memory BEFORE killing the loop's executors (journal appends
+        #    run on the default executor — order matters; B1 lesson). The 5s
+        #    budget covers ONLY the summary LLM call.
+        try:
+            await asyncio.wait_for(self._save_session_summary(), timeout=5.0)
+        except Exception as e:
+            print(f"[JARVIS] shutdown: session summary not saved ({e})")
+        # 3b) Evolution consolidation OUTSIDE the summary's budget — when due
+        #     it can run ~80s (2026-10-12: ~6000 turns through an LLM). It is
+        #     awaited, not fire-and-forgotten, so the pass (and its gate
+        #     commit in maybe_evolve) completes before harder exit stages get
+        #     going. The hard-exit timer is armed only at stage 6, so this
+        #     gets its full time here.
+        try:
+            _evolved = await self._evolve_memory_pass()
+            if _evolved:
+                print(f"[JARVIS] shutdown: {_evolved}")
+        except Exception as e:
+            print(f"[JARVIS] shutdown: evolution pass failed ({e})")
+
+        # 4) stop the dashboard servers (main :8000 + alias :8001). The FastAPI
+        # app holds the listening sockets; there is no server-side shutdown
+        # hook, so the exit below tears them down with the process — bounded,
+        # not blind: this call gives uvicorn a chance to finish in-flight
+        # requests first.
+        try:
+            if self._dashboard is not None:
+                await asyncio.wait_for(self._dashboard_shutdown(), timeout=4.0)
+        except Exception as e:
+            print(f"[JARVIS] shutdown: dashboard stop interrupted ({e})")
+
+        # 5) close the RIO window child (owned via profile-dir match)
+        try:
+            import rio_window as _rw
+            _rw.close_rio_window()
+        except Exception:
+            pass
+        # NOTE: the consolidation pass itself lives in step 3b above, where it
+        # cannot fall inside the summary's 5s wait_for. (Objective 4.6:
+        # timeouts for graceful shutdown.)
+
+        # 6) bounded exit — non-daemon threads must not hang the interpreter
+        #    (B1); flush logs, then hard-exit 0 exactly once.
+        def _hard_exit() -> None:
+            print("[JARVIS] ✅ Shutdown complete — exiting 0.")
+            try:
+                sys.stdout.flush(); sys.stderr.flush()
+            except Exception:
+                pass
+            _os._exit(0)
+        threading.Timer(_SHUTDOWN_TIMEOUT_S, _hard_exit).start()
+        _hard_exit()
+
+class _RioWindowUI:
+    """JarvisUI-compatible stand-in for RIO-as-default-window mode.
+    Same public surface the rest of main.py already programs against
+    (write_log, set_state, muted, on_text_command, wait_for_api_key, root, …)
+    but:
+      * write_log/set_state feed a status event stream that the RIO window
+        polls — instead of painting a PyQt HUD nobody sees.
+      * root.mainloop() blocks on a quit-flag poll — the real UI is the
+        Chrome --app window, which is its own process; when this mainloop
+        returns, the process exits.
+      * _app.quit() flips that flag (SIGINT path) — same effect.
+      * WINDOW-CLOSE SHUTDOWN: the mainloop also watches the RIO window
+        process (owned via its dedicated Chrome profile dir). Once the window
+        has actually been up, its disappearance is the user closing the app →
+        triggers JarvisLive.graceful_shutdown() exactly once on the runner
+        loop. This is what makes "close the RIO window" stop the assistant.
+    """
+
+    def __init__(self):
+        self._quit = False
+        self._log_lines: list[str] = []          # bounded status ring
+        self._state = "IDLE"
+        self._lock = threading.Lock()
+        self._shutdown_started = False            # one-shot guard (Objective 4.5)
+
+        class _NoRoot:
+            def mainloop(self, *a, **kw):
+                # Qt event loop NOT started (no QApplication exists here);
+                # park the main thread on a plain sleep loop until quit.
+                # + window-close watch (only meaningful in RIO-window mode).
+                import rio_window as _rw
+                host = self._host
+                seen_window = False
+                grace = 60.0                      # window must appear within 60s
+                deadline = time.monotonic() + grace
+                while not host._quit:
+                    try:
+                        up = _rw.window_running()
+                    except Exception:
+                        up = seen_window          # probe failure ≠ user closed
+                    if up:
+                        seen_window = True
+                        deadline = time.monotonic() + grace
+                    elif seen_window:
+                        # the window the user had open is gone → they closed RIO
+                        if host._on_window_closed and not host._shutdown_started:
+                            host._shutdown_started = True
+                            print("[RIO window] closed by user — shutting the "
+                                  "assistant down cleanly…")
+                            host._on_window_closed()
+                        return                     # mainloop ends; process exits
+                    elif time.monotonic() > deadline:
+                        # window never appeared (headless/cert trouble): do NOT
+                        # kill the assistant — it still serves phone/Hermes.
+                        pass
+                    time.sleep(0.5)
+            def protocol(self, *a, **kw):
+                pass
+            _host = None  # set below
+
+        self.root = _NoRoot()
+        self.root._host = self
+        self._app = _NoApp()
+        self._app._host_ref = self                     # so quit() flips _quit
+        self._on_window_closed = None                  # set by main()
+
+    def request_shutdown(self) -> None:
+        """Window gone → flip the quit flag (idempotent like _app.quit())."""
+        self._quit = True
+
+    # ── surface the rest of main.py already calls ────────────────────
+    def write_log(self, text: str) -> None:
+        with self._lock:
+            self._log_lines.append(str(text))
+            if len(self._log_lines) > 200:
+                del self._log_lines[:-200]
+        print(text, flush=True)
+
+    def set_state(self, state: str) -> None:
+        self._state = str(state)
+
+    @property
+    def state(self) -> str:
+        return self._state
+
+    def recent_lines(self, n: int = 12) -> list[str]:
+        with self._lock:
+            return list(self._log_lines[-n:])
+
+    # No-ops / benign values — nothing HUD-specific should leak
+    muted = False
+    current_file = None
+    def show_content(self, *_a, **_k): pass
+    def set_audio_level(self, *_a, **_k): pass
+    def set_mic_paused(self, *_a, **_k): pass
+    def start_camera_stream(self): pass
+    def stop_camera_stream(self): pass
+    def show_camera_frame(self, *_a, **_k): pass
+    def show_confirm(self, *_a, **_k): pass
+    def hide_confirm(self): pass
+    def prompt_reconfig(self): pass
+    def notify_phone_connected(self): pass
+    def push_visemes(self, *_a, **_k): pass
+    def wait_for_api_key(self): pass
+    # Callback slots — JarvisLive assigns these; defaults are no-ops so an
+    # unassigned slot still does nothing dangerous.
+    on_text_command        = None
+    on_remote_clicked      = None
+    on_interrupt           = None
+    on_voice_change        = None
+    on_audio_device_change = None
+    on_wake_toggle         = None
+    on_wake_manual         = None
+    on_wake_install        = None
+    on_push_to_talk        = None
+    get_plugins            = None
+    get_plugin_settings    = None
+    uptime_getter          = None
+    wake_is_ready          = None
+    wake_get_state         = None
+    ptt_hold               = None
+
+    # JarvisUI.root.mainloop is called from main(); _app.quit() from the
+    # SIGINT handler maps onto it via the flag above.
+
+
+class _NoApp:
+    """QApplication.quit-shim: sets the host's quit flag."""
+    def __init__(self):
+        self._host_ref = None
+    def quit(self):
+        if self._host_ref is not None:
+            self._host_ref._quit = True
+
+
 def main():
-    ui = JarvisUI("face.png")
+    # JARVIS_RIO_WINDOW=1 (default): RIO's web UI becomes the desktop window
+    # and the old PyQt HUD is not shown at all — no flash, no overlap (Phase:
+    # "make RIO the default desktop UI"). The voice loop, dashboard, Hermes
+    # and every agent run exactly as before; only the window surface swaps.
+    # Set JARVIS_RIO_WINDOW=0 to restore the old HUD as the window surface.
+    _rio_window_mode = False
+    try:
+        _rio_window_mode = _os.environ.get("JARVIS_RIO_WINDOW", "1").strip() != "0"
+    except Exception:
+        pass
+
+    if _rio_window_mode:
+        ui = _RioWindowUI()
+    else:
+        ui = JarvisUI("face.png")
 
     # Ctrl+C must not raise KeyboardInterrupt inside an arbitrary Qt slot:
     # the exception escapes the slot, Qt treats it as fatal and the process
@@ -3537,20 +4342,52 @@ def main():
     # "Aborted (core dumped)"). Catch the signal instead: quit the Qt loop
     # cleanly and let the daemon threads die with the process.
     import signal as _signal
+    # SIGINT → the SAME graceful pipeline the window close uses, NOT
+    # ui._app.quit(): the old quit path unwound asyncio.run() while the
+    # dashboard was still serving, in-flight handlers scheduled on the dead
+    # default executor, and the executor-crash guard turned a plain Ctrl+C
+    # into SystemExit(1) — which systemd (Restart=on-failure) treats as a
+    # crash and RESURRECTS the app (observed 2026-10-12). In RIO-window
+    # mode the app-quit flag does nothing anyway (no Qt loop), so route the
+    # signal straight into the runner's loop where shutdown is orchestrated
+    # (stop intake → close session → flush memory → stop dashboard →
+    # bounded exit 0, all under graceful_shutdown's one-shot guard).
+    _hold = {"jarvis": None}
+
     def _sigint(_sig, _frm):
-        print("\n🔴 Shutting down...")
-        ui._app.quit()
+        print("\n🔴 Shutting down (SIGINT)…")
+        jarvis = _hold.get("jarvis")   # _hold hoisted above this handler
+        if jarvis is not None:
+            loop = jarvis._loop
+            if loop is not None and not loop.is_closed():
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        jarvis.graceful_shutdown("sigint"), loop)
+                    return
+                except Exception:
+                    pass
+        # Runner not up yet (or loop already gone): nothing to stop
+        # gracefully — flip the quit flag and let main() exit; graceful 
+        # paths below also handle the not-yet-connected case.
+        ui.request_shutdown()
     try:
         _signal.signal(_signal.SIGINT, _sigint)
     except ValueError:
         pass  # handler not installable off the main thread — ignore
     # Python-level handlers only run when the interpreter executes bytecode;
     # Qt's C++ event loop can starve them. A no-op timer hands control back
-    # ~10×/s so the SIGINT handler is actually reached.
-    from PyQt6.QtCore import QTimer as _QTimer
-    _sig_timer = _QTimer()
-    _sig_timer.timeout.connect(lambda: None)
-    _sig_timer.start(100)
+    # ~10×/s so the SIGINT handler is actually reached. Skipped in RIO-window
+    # mode: there is no Qt event loop, and _NoRoot.mainloop polls the quit
+    # flag itself.
+    if not _rio_window_mode:
+        from PyQt6.QtCore import QTimer as _QTimer
+        _sig_timer = _QTimer()
+        _sig_timer.timeout.connect(lambda: None)
+        _sig_timer.start(100)
+
+    # (RIO window mode: the opener below discovers the live DashboardServer
+    # through the DashboardServer.live registry — set in serve() — so no
+    # holder plumbing is needed between JarvisLive and the opener.)
 
     def runner():
         ui.wait_for_api_key()
@@ -3571,12 +4408,76 @@ def main():
         except Exception as _e:
             print(f"[LLM] ⚠️  failover router failed to install: {_e}")
         jarvis = JarvisLive(ui)
+        _hold["jarvis"] = jarvis
         try:
             asyncio.run(jarvis.run())
         except KeyboardInterrupt:
             print("\n🔴 Shutting down...")
+            # Route SIGINT through the SAME graceful pipeline the window close
+            # uses. asyncio.run() alone would tear down the loop's default
+            # executor while uvicorn is still serving — in-flight handlers
+            # (rio_health) and workers (_run_system_monitor) then schedule on
+            # the dead executor and raise "cannot schedule new futures after
+            # shutdown"; the run-loop's executor-crash guard folds that into
+            # SystemExit(1) and systemd (Restart=on-failure) treats a plain
+            # Ctrl+C as a crash and RESURRECTS the app (observed 2026-10-12).
+            # graceful_shutdown already stops intake, closes the live session,
+            # flushes memory, awaits the evolution pass, STOPS THE DASHBOARD
+            # first, and hard-exits 0 under a timer — idempotent and safe to
+            # call even if a window-close shutdown already ran.
+            loop = jarvis._loop
+            if loop is not None and not loop.is_closed():
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        jarvis.graceful_shutdown("sigint"), loop)
+                except Exception:
+                    pass
+            raise SystemExit(0)
+
+    def _on_window_closed():
+        """User closed the RIO desktop window → run graceful_shutdown() on
+        the runner's event loop. Runs on the MAIN thread (mainloop watcher):
+        asyncio.run_coroutine_threadsafe is the thread-safe bridge into the
+        runner loop. Idempotent — the one-shot guard lives in both the UI
+        (_shutdown_started) and graceful_shutdown itself."""
+        jarvis = _hold.get("jarvis")
+        if jarvis is None:
+            # runner still starting up (or already gone): nothing to stop
+            # gracefully — exit now with code 0 so the service doesn't restart.
+            print("[JARVIS] 🔻 Window closed before the assistant was up — exit 0.")
+            _os._exit(0)
+        loop = jarvis._loop
+        if loop is None or loop.is_closed():
+            _os._exit(0)
+        fut = asyncio.run_coroutine_threadsafe(
+            jarvis.graceful_shutdown("window"), loop)
+        # keep the main thread alive so shutdown logs + the bounded hard-exit
+        # timer (inside graceful_shutdown) can run: block briefly, the timer
+        # ends the process either way.
+        try:
+            fut.result(timeout=15.0)
+        except Exception:
+            pass
+        time.sleep(10.0)      # let the 8s bounded timer fire os._exit(0)
 
     threading.Thread(target=runner, daemon=True).start()
+
+    if _rio_window_mode:
+        # Open the RIO desktop window as soon as the dashboard is live. A
+        # daemon thread so a slow backend never blocks the SIGINT path; the
+        # opener itself refuses to open a dead window (returns 2) and logs,
+        # and it discovers the live DashboardServer via the class registry.
+        import rio_window as _rw
+        ui._on_window_closed = _on_window_closed
+        def _opener():
+            from dashboard.server import DashboardServer as _DS
+            for _ in range(120):                    # ≤60 s for dashboard.serve()
+                if _DS.live is not None:
+                    break
+                time.sleep(0.5)
+            _rw.open_rio_window(dashboard=_DS.live, wait_secs=20.0)
+        threading.Thread(target=_opener, daemon=True).start()
+
     ui.root.mainloop()
 
 if __name__ == "__main__":
