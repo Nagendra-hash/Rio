@@ -14,18 +14,21 @@ SPECIALIST / FINAL FALLBACK — never the default:
     3. OPENROUTER FREE — task-aware free-model chain, then the documented Free
                 Models Router id `openrouter/free`. NOT `openrouter/auto`
                 (which can select PAID models).
-    4. GEMINI — only when cheaper providers failed, the task is vision, or the
+    4. NVIDIA NIM — build.nvidia.com's OpenAI-compatible endpoint (free dev
+                tier, `nvapi-…` key). Sits after the other free clouds, before
+                the paid tails.
+    5. GEMINI — only when cheaper providers failed, the task is vision, or the
                 daily budget guard still allows it.
 
 TASK-AWARE ROUTING TABLE (implemented in _plan_chain):
     Task                        Chain (left → right)
     ─────────────────────────   ─────────────────────────────────────────────
-    simple chat / general       Ollama → 3B → FreeLLMAPI → OpenRouter → Gemini
-    coding                      Ollama → 3B → OpenRouter → FreeLLMAPI → Gemini
-    simple summarization        Ollama → 3B → FreeLLMAPI → OpenRouter → Gemini
-    complex reasoning           OpenRouter → FreeLLMAPI → Gemini   (no local)
-    LONG/DIFFICULT text         FreeLLMAPI → OpenRouter → Gemini   (no local)
-    image / PDF / multimodal    FreeLLMAPI → OpenRouter → Gemini   (never local)
+    simple chat / general       Ollama → 3B → FreeLLMAPI → OpenRouter → NVIDIA → Gemini
+    coding                      Ollama → 3B → OpenRouter → FreeLLMAPI → NVIDIA → Gemini
+    simple summarization        Ollama → 3B → FreeLLMAPI → OpenRouter → NVIDIA → Gemini
+    complex reasoning           OpenRouter → FreeLLMAPI → NVIDIA → Gemini   (no local)
+    LONG/DIFFICULT text         FreeLLMAPI → OpenRouter → NVIDIA → Gemini   (no local)
+    image / PDF / multimodal    FreeLLMAPI → OpenRouter → NVIDIA → Gemini   (never local)
     grounded search (tools)     Gemini only (no OpenAI-compatible equivalent)
     provider failure            next provider (cooldown so it is skipped
                                 temporarily, per the health-check rules)
@@ -56,7 +59,7 @@ GEMINI TOKEN PROTECTION (the plan's ten rules, as implemented here):
 MODES (config "router_mode", or env JARVIS_ROUTER_MODE; default "smart"):
     "local"   Always local. Maximum privacy, zero cloud. Errors if the local
               engines cannot serve (e.g. vision, or a too-long prompt).
-    "free"    Local → FreeLLMAPI → OpenRouter Free. Never Gemini.
+    "free"    Local → FreeLLMAPI → OpenRouter Free → NVIDIA. Never Gemini.
     "smart"   Local → free cloud → Gemini (budget-guarded). Best default.
     "gemini"  Force Gemini (deliberate use only; bypasses the budget guard).
 
@@ -77,6 +80,7 @@ Configuration (config/api_keys.json):
         {"key": "sk-or-v1-…"}                # "auto" → task-aware chain
     ],
     "grok_api_key":  "xai-…",
+    "nvidia_api_key": "nvapi-…",             # build.nvidia.com (free dev tier)
     "openai_api_key": "sk-…",
     "ollama_enabled": true,
     "ollama_models": ["qwen2.5:1.5b"]
@@ -162,6 +166,7 @@ _MODELS_TTL_S = 6 * 3600
 
 _OR_URL    = "https://openrouter.ai/api/v1/chat/completions"
 _GROK_URL  = "https://api.x.ai/v1/chat/completions"
+_NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 _OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 _FREELLMAPI_URL = "http://127.0.0.1:3001/v1/chat/completions"
 _OLLAMA_URL = "http://127.0.0.1:11434/v1/chat/completions"
@@ -195,6 +200,44 @@ LOCAL_MAX_PROMPT_CHARS = 4000
 # Per-provider failover chains (override in config via grok_models / openai_models).
 _GROK_DEFAULT_MODELS   = ["grok-4.6", "grok-4.5", "grok-3-mini"]
 _OPENAI_DEFAULT_MODELS = ["gpt-4o-mini", "gpt-4.1-mini"]
+# NVIDIA NIM (build.nvidia.com, free dev tier — ~40 req/min). Defaults are
+# live-probed against the real key on 2026-10-15 (much of the advertised
+# catalog 404s on invocation; only these are reliably deployable). The walker
+# in _call_openrouter drops any model that starts returning 404/410 EOL.
+# 2026-10-18: DeepSeek-V4.1-Flash verified present on the live catalog and
+# promoted to the FRONT of the CODE chain — it is the coding specialist the
+# DevAgent now routes through (see _NVIDIA_CODE_MODELS).
+_NVIDIA_DEFAULT_MODELS = [
+    "nvidia/nemotron-3-super-120b-a12b",   # 120B MoE, ~1 s — matches the OR free prefs
+    "deepseek-ai/deepseek-v4.1-flash",     # coding specialist — front of the code chain
+    "openai/gpt-oss-20b",                  # ~1 s, solid general tail
+    "z-ai/glm-5.3-flash",                  # slow free-tier queue (~30 s) but alive
+]
+# Coding tasks try DeepSeek first. Split out so a config can override either
+# chain independently (nvidia_models / nvidia_code_models).
+_NVIDIA_CODE_MODELS = [
+    "deepseek-ai/deepseek-v4.1-flash",
+    "nvidia/nemotron-3-super-120b-a12b",
+    "openai/gpt-oss-20b",
+]
+
+# Coding asks lead with DeepSeek. NVIDIA NIM's deepseek-v4.1-flash trial
+# endpoint currently stalls (0-byte responses — a service-side issue, not an
+# entitlement or key problem), so the SAME model is reached through OpenRouter
+# first (verified live 2026-10-18, ~1 s), with NVIDIA NIM's step second. Both
+# ids verified present in the OpenRouter catalog. Overridable via config
+# `deepseek_models`.
+_DEEPSEEK_CODE_MODELS = [
+    "deepseek/deepseek-chat",              # reliable DeepSeek coder (v3, verified live)
+    "deepseek/deepseek-v4.1-flash",        # the wanted specialist; unreliable via
+                                           # OpenRouter (returns null content) so it
+                                           # sits behind chat and is tried best-effort
+]
+# A bounded completion cap. OpenRouter credit-checks against the model's
+# DEFAULT max (131072 for v4.1-flash), so sending no cap 402s a low-balance
+# key even though the request is fine — measured 2026-10-18: 4096 succeeds,
+# unbounded fails. Overridable via config `deepseek_max_tokens`.
+_DEEPSEEK_MAX_TOKENS = 4096
 
 # ── Modes & budget (plan rules 1 and 9) ──────────────────────────────────────
 _ROUTER_MODES = ("local", "free", "smart", "gemini")
@@ -293,6 +336,8 @@ def _nothing_configured(full_cfg: dict) -> bool:
     if _load_router_config():
         return False
     if (full_cfg.get("grok_api_key") or "").strip():
+        return False
+    if (full_cfg.get("nvidia_api_key") or "").strip():
         return False
     if (full_cfg.get("openai_api_key") or "").strip():
         return False
@@ -759,7 +804,9 @@ def _gemini_budget_ok(task: str, full_cfg: dict) -> bool:
 
 def _plan_chain(mode: str, task: str, long_prompt: bool, *,
                 ollama: bool = False, local3b: bool = False, freellm: bool = False,
-                openrouter: bool = False, grok: bool = False, openai: bool = False,
+                openrouter: bool = False, nvidia: bool = False,
+                deepseek: bool = False,
+                grok: bool = False, openai: bool = False,
                 budget_ok: bool = True) -> list[str]:
     """Ordered provider names for (mode, task, prompt length). Pure so the
     routing table is testable without touching the network."""
@@ -775,9 +822,16 @@ def _plan_chain(mode: str, task: str, long_prompt: bool, *,
         if local_ok and local3b:
             steps.append("llm_local")
     if mode in ("free", "smart"):
-        # Coding/complex-reasoning prefer OpenRouter Free second (table);
-        # everything else prefers the FreeLLMAPI pool.
+        # Coding asks lead with NVIDIA NIM's coding specialist (DeepSeek-V4.1-
+        # Flash); complex reasoning still prefers the OpenRouter Free chain.
+        # Everything else prefers the FreeLLMAPI pool (table).
         if task in ("code", "reason"):
+            # Coding leads with DeepSeek (via OpenRouter), then NVIDIA NIM's
+            # coding specialist, then the generic OpenRouter/FreeLLMAPI pair.
+            if task == "code" and deepseek:
+                steps.append("deepseek")
+            if task == "code" and nvidia:
+                steps.append("nvidia")
             if openrouter:
                 steps.append("openrouter")
             if freellm:
@@ -787,6 +841,10 @@ def _plan_chain(mode: str, task: str, long_prompt: bool, *,
                 steps.append("freellm")
             if openrouter:
                 steps.append("openrouter")
+        # NVIDIA NIM is a free-tier cloud — it belongs with the free rungs,
+        # after the OpenRouter/FreeLLMAPI pair and ahead of the paid tails.
+        if nvidia and "nvidia" not in steps:
+            steps.append("nvidia")
         if mode == "smart":
             # paid-key tails stay a smart-mode last resort, ahead of Gemini
             if grok:
@@ -900,6 +958,43 @@ def _step_openrouter(entries: list[dict], message: dict, system: str):
     raise RuntimeError(f"OpenRouter keys exhausted — {last}")
 
 
+def _step_deepseek(full_cfg: dict, message: dict, system: str,
+                   task: str = "general"):
+    """The DeepSeek coding head, reached through OpenRouter.
+
+    NVIDIA NIM's deepseek-v4.1-flash trial endpoint stalls (0-byte responses;
+    service side, not the key), but the same model and its chat sibling answer
+    through OpenRouter — so coding asks try this BEFORE NVIDIA's NIM step. It
+    reuses the OpenRouter keys already in config.
+    """
+    entries = _load_router_config()
+    if not entries:
+        raise _Skip("no openrouter key for deepseek")
+    models = full_cfg.get("deepseek_models") or _DEEPSEEK_CODE_MODELS
+    cap = int(full_cfg.get("deepseek_max_tokens") or _DEEPSEEK_MAX_TOKENS)
+    messages = _build_messages(message, system)
+    last = "no attempt made"
+    # Model-major inside the key loop: a 402/401 on one (expensive) model must
+    # not drop a key that a cheaper sibling model could still answer on, so
+    # each model is tried individually instead of letting _call_openrouter's
+    # 402 → _KeyDead abort the whole key.
+    for entry in entries:
+        for model in models:
+            try:
+                text, mdl, usage = _call_openrouter(
+                    entry["key"], [model], messages, url=_OR_URL,
+                    max_tokens=cap)
+                print(f"[LLM] ✅ {mdl} via DeepSeek (OpenRouter)")
+                return text, mdl, usage
+            except _KeyDead as e:
+                last = f"{model}: {e}"
+                continue
+            except Exception as e:
+                last = f"{model}: {type(e).__name__}: {str(e)[:120]}"
+                continue
+    raise RuntimeError(f"DeepSeek keys exhausted — {last}")
+
+
 def _step_grok(full_cfg: dict, message: dict, system: str):
     key = (full_cfg.get("grok_api_key") or "").strip()
     if not key:
@@ -919,6 +1014,26 @@ def _step_openai(full_cfg: dict, message: dict, system: str):
     text, mdl, usage = _call_openrouter(key, models, _build_messages(message, system),
                                         url=_OPENAI_URL)
     print(f"[LLM] ✅ {mdl} via OpenAI")
+    return text, mdl, usage
+
+
+def _step_nvidia(full_cfg: dict, message: dict, system: str,
+                 task: str = "general"):
+    key = (full_cfg.get("nvidia_api_key") or "").strip()
+    if not key:
+        raise _Skip("no nvidia key")
+    # Coding asks want the coding specialist first (DeepSeek-V4.1-Flash); the
+    # general chain keeps nemotron at the front. Either chain is overridable
+    # from config.
+    cfg_models = full_cfg.get("nvidia_models") or []
+    if task == "code":
+        models = (full_cfg.get("nvidia_code_models") or cfg_models
+                  or _NVIDIA_CODE_MODELS)
+    else:
+        models = cfg_models or _NVIDIA_DEFAULT_MODELS
+    text, mdl, usage = _call_openrouter(key, models, _build_messages(message, system),
+                                        url=_NVIDIA_URL)
+    print(f"[LLM] ✅ {mdl} via NVIDIA NIM")
     return text, mdl, usage
 
 
@@ -1102,7 +1217,9 @@ def _patched_generate(self, *, model=None, contents=None, **kwargs):
         "local3b": _llm_local_configured(),
         "freellm": bool((full_cfg.get("freellmapi_api_key") or "").strip()),
         "openrouter": bool(_load_router_config()),
+        "deepseek": bool(_load_router_config()),
         "grok": bool((full_cfg.get("grok_api_key") or "").strip()),
+        "nvidia": bool((full_cfg.get("nvidia_api_key") or "").strip()),
         "openai": bool((full_cfg.get("openai_api_key") or "").strip()),
     }
     plan = _plan_chain(mode, task, long_prompt,
@@ -1119,7 +1236,9 @@ def _patched_generate(self, *, model=None, contents=None, **kwargs):
         "freellm":    lambda: _step_freellm((full_cfg.get("freellmapi_api_key") or "").strip(),
                                             message, system),
         "openrouter": lambda: _step_openrouter(_load_router_config(), message, system),
+        "deepseek":   lambda: _step_deepseek(full_cfg, message, system, task),
         "grok":       lambda: _step_grok(full_cfg, message, system),
+        "nvidia":     lambda: _step_nvidia(full_cfg, message, system, task),
         "openai":     lambda: _step_openai(full_cfg, message, system),
         "gemini":     lambda: _gemini_attempt(self, model, contents, kwargs),
     }
@@ -1190,6 +1309,9 @@ def install_router(verbose: bool = True) -> bool:
         parts.append("FreeLLMAPI")
     if n_keys:
         parts.append(f"OpenRouter×{n_keys}")
+        parts.append("DeepSeek(code)")
+    if (full_cfg.get("nvidia_api_key") or "").strip():
+        parts.append("NVIDIA")
     if (full_cfg.get("grok_api_key") or "").strip():
         parts.append("Grok")
     if (full_cfg.get("openai_api_key") or "").strip():
@@ -1218,6 +1340,7 @@ def router_status() -> dict:
             local3b=_llm_local_configured(),
             freellm=bool((full_cfg.get("freellmapi_api_key") or "").strip()),
             openrouter=bool(_load_router_config()),
+            nvidia=bool((full_cfg.get("nvidia_api_key") or "").strip()),
             grok=bool((full_cfg.get("grok_api_key") or "").strip()),
             openai=bool((full_cfg.get("openai_api_key") or "").strip()),
             budget_ok=_gemini_budget_ok("general", full_cfg),
@@ -1227,6 +1350,8 @@ def router_status() -> dict:
         "local_3b": _llm_local_configured(),
         "freellmapi": bool((full_cfg.get("freellmapi_api_key") or "").strip()),
         "openrouter_keys": len(_load_router_config()),
+        "deepseek": bool(_load_router_config()),
+        "nvidia": bool((full_cfg.get("nvidia_api_key") or "").strip()),
         "gemini_keys": len(_all_gemini_keys()),
         "gemini_calls_today": _gemini_calls_today(),
         "gemini_daily_budget": int(full_cfg.get("gemini_daily_call_budget")

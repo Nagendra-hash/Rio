@@ -12,6 +12,7 @@ Also standalone: .venv/bin/python tests/test_llm_router_plan.py
 """
 import json
 import sys
+from datetime import date
 import tempfile
 import types
 from pathlib import Path
@@ -56,15 +57,20 @@ def test_classify_task() -> bool:
 
 def test_plan_chain_table() -> bool:
     ALL = dict(ollama=True, local3b=True, freellm=True, openrouter=True,
-               grok=True, openai=True)
+               nvidia=True, grok=True, openai=True)
 
-    # smart + general: local workhorse first, FreeLLMAPI, OpenRouter, Gemini last
+    # smart + general: local workhorse first, FreeLLMAPI, OpenRouter, then the
+    # free NVIDIA rung, paid tails, Gemini last
     assert R._plan_chain("smart", "general", False, **ALL) == \
-        ["ollama", "llm_local", "freellm", "openrouter", "grok", "openai", "gemini"]
+        ["ollama", "llm_local", "freellm", "openrouter", "nvidia",
+         "grok", "openai", "gemini"]
 
-    # smart + code: OpenRouter preferred over FreeLLMAPI (plan table)
+    # smart + code: DeepSeek leads the cloud rungs when configured; with the
+    # default flags (no explicit deepseek) NVIDIA's coding specialist leads,
+    # OpenRouter preferred over FreeLLMAPI behind it (plan table)
     assert R._plan_chain("smart", "code", False, **ALL) == \
-        ["ollama", "llm_local", "openrouter", "freellm", "grok", "openai", "gemini"]
+        ["ollama", "llm_local", "nvidia", "openrouter", "freellm",
+         "grok", "openai", "gemini"]
 
     # smart + complex reasoning: NO local rungs (they cannot do it well)
     chain = R._plan_chain("smart", "reason", False, **ALL)
@@ -80,9 +86,9 @@ def test_plan_chain_table() -> bool:
     chain = R._plan_chain("smart", "general", True, **ALL)
     assert "ollama" not in chain and "llm_local" not in chain
 
-    # free mode: never Gemini, never the paid tails
+    # free mode: never Gemini, never the paid tails — NVIDIA stays (free tier)
     chain = R._plan_chain("free", "general", False, **ALL)
-    assert chain == ["ollama", "llm_local", "freellm", "openrouter"]
+    assert chain == ["ollama", "llm_local", "freellm", "openrouter", "nvidia"]
 
     # local mode: only local engines
     assert R._plan_chain("local", "general", False, **ALL) == ["ollama", "llm_local"]
@@ -94,10 +100,34 @@ def test_plan_chain_table() -> bool:
     chain = R._plan_chain("smart", "general", False, budget_ok=False, **ALL)
     assert "gemini" not in chain and "grok" in chain
 
-    # nothing configured anywhere → empty plan (honest failure)
-    assert R._plan_chain("smart", "general", False) == []
+    # nothing configured → only the unconditional Gemini last resort remains;
+    # it is skipped at call time when no key exists, so the plan still fails
+    # honestly after every other step was also unavailable.
+    assert R._plan_chain("smart", "general", False) == ["gemini"]
     print("✓ routing table: local-first, code→OpenRouter, reason/vision skip "
           "local, free never Gemini, budget drops Gemini")
+    return True
+
+
+def test_plan_chain_deepseek_leads_code() -> bool:
+    """DeepSeek (via OpenRouter) is the head of the CODE chain when it is
+    available; NVIDIA NIM is the second coding rung. General and reason tasks
+    are untouched, and with no OpenRouter keys the rung simply is not planned
+    (NVIDIA still leads)."""
+    flags = dict(ollama=True, local3b=True, freellm=True, openrouter=True,
+                 nvidia=True, deepseek=True, grok=True, openai=True)
+    assert R._plan_chain("smart", "code", False, **flags) == \
+        ["ollama", "llm_local", "deepseek", "nvidia", "openrouter", "freellm",
+         "grok", "openai", "gemini"]
+    # the code-only head never appears for general/reason
+    assert "deepseek" not in R._plan_chain("smart", "general", False, **flags)
+    assert "deepseek" not in R._plan_chain("smart", "reason", False, **flags)
+    # no OpenRouter keys → no deepseek rung; NVIDIA still leads coding
+    no_or = dict(flags, openrouter=False, deepseek=False)
+    assert R._plan_chain("smart", "code", False, **no_or) == \
+        ["ollama", "llm_local", "nvidia", "freellm", "grok", "openai",
+         "gemini"]
+    print("✓ deepseek leads the code chain; general/reason untouched")
     return True
 
 
@@ -126,9 +156,10 @@ def test_quality_gate() -> bool:
 def test_budget_guard() -> bool:
     with tempfile.TemporaryDirectory() as td:
         log = Path(td) / "llm_usage.jsonl"
-        today_line = json.dumps({"ts": "2026-09-26T10:00:00", "provider": "gemini",
+        today = date.today().isoformat()   # budget counts *today*; never hardcode
+        today_line = json.dumps({"ts": f"{today}T10:00:00", "provider": "gemini",
                                  "ok": True, "task": "general"})
-        other_line = json.dumps({"ts": "2026-09-26T10:00:01", "provider": "ollama",
+        other_line = json.dumps({"ts": f"{today}T10:00:01", "provider": "ollama",
                                  "ok": True, "task": "general"})
         log.write_text("\n".join([today_line] * 200 + [other_line]) + "\n")
         with patch.object(R, "_USAGE_PATH", log):
@@ -179,7 +210,9 @@ def test_usage_log_and_rotation() -> bool:
             assert rec3["cost"] == 0.0
             # rotation: blow past the byte cap, oldest lines are dropped
             big = json.dumps({"ts": "t", "pad": "x" * 1000}) + "\n"
-            log.write_text(big * R._USAGE_MAX_BYTES // len(big))
+            # +2 guarantees st_size > _USAGE_MAX_BYTES (floor division alone
+            # lands under the cap, so the rotation branch would never fire)
+            log.write_text(big * (R._USAGE_MAX_BYTES // len(big) + 2))
             R._log_usage("general", "ollama", "m", True, 0.1, None, [], "smart")
             assert len(log.read_text().splitlines()) <= R._USAGE_KEEP_LINES + 1
     print("✓ usage log: full record shape, errors recorded, size rotation")
@@ -342,10 +375,14 @@ def test_patched_generate_budget_blocks_gemini() -> bool:
                 except RuntimeError as e:
                     assert "gemini" not in [h["provider"] for h in
                                             getattr(e, "hops", [])] if False else True
-            # vision is exempt from the budget: Gemini stays reachable
-            vision = {"content": [{"type": "text", "text": "what is this?"},
-                                  {"type": "image_url",
-                                   "image_url": {"url": "data:image/png;base64,x"}}]}
+            # vision is exempt from the budget: Gemini stays reachable.
+            # contents in the converter's documented shape (str | genai
+            # Part-like | list) — an OpenAI-style dict is not one of them and
+            # would iterate over its keys, losing the image.
+            part = types.SimpleNamespace(
+                inline_data=types.SimpleNamespace(mime_type="image/png",
+                                                  data=b"\x89PNG"))
+            vision = ["what is this?", part]
             with patch.object(R, "_gemini_calls_today", return_value=999), \
                  patch.object(R, "_step_freellm", side_effect=RuntimeError("down")), \
                  patch.object(R, "_step_openrouter", side_effect=RuntimeError("down")), \
@@ -443,7 +480,7 @@ def test_router_status_shape() -> bool:
     with patch.object(R, "_ollama_alive", return_value=(True, "")):
         st = R.router_status()
     for key in ("mode", "order", "ollama", "local_3b", "freellmapi",
-                "openrouter_keys", "gemini_keys", "gemini_calls_today",
+                "openrouter_keys", "nvidia", "gemini_keys", "gemini_calls_today",
                 "gemini_daily_budget", "usage_log"):
         assert key in st, f"router_status missing {key}"
     assert st["mode"] in R._ROUTER_MODES
