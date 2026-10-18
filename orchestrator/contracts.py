@@ -32,6 +32,31 @@ class TaskType(str, Enum):
     TRADING = "trading"
     RAG = "rag"
     SYSTEM = "system"
+    # Phase 11-12 specialists.
+    EMAIL = "email"
+    CALENDAR = "calendar"
+    HEALTH = "health"
+    # Phase 13 daily-life specialists.
+    BRIEFING = "briefing"
+    MEAL = "meal"
+    TRAVEL = "travel"
+    # Phase 14 personal finance.
+    FINANCE = "finance"
+    # Phase 15 study + Meta Quest knowledge.
+    STUDY = "study"
+    META_QUEST = "meta_quest"
+    # Phase 16 legal document analysis.
+    LEGAL = "legal"
+    # Phase 17 SQL over permitted databases.
+    SQL = "sql"
+    # Phase 18 growth: self-evaluation, lead scoring, marketing.
+    SELF_EVAL = "self_eval"
+    LEAD_SCORE = "lead_score"
+    MARKETING = "marketing"
+    # Phase 19 news curation.
+    NEWS = "news"
+    # Phase 20 clean-room app rebuilds (replica pack).
+    REPLICA = "replica"
     _FALLBACK = "fallback"
 
 
