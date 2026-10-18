@@ -27,12 +27,15 @@ ORDER = ("research", "script", "production", "review", "publish", "learn")
 
 
 class YouTubePipeline:
-    def __init__(self, workspace: str | os.PathLike, *, llm=None,
+    def __init__(self, workspace: str | os.PathLike, *, llm=None, tts=None,
                  youtube_dir: str | os.PathLike | None = None) -> None:
         self.workspace = Path(workspace).expanduser()
         self.youtube_dir = (Path(youtube_dir).expanduser() if youtube_dir
                             else self.workspace / "youtube")
         self.llm = llm if llm is not None else HouseLLM()
+        # An injectable narration synthesizer tts(text, out_path) -> bool. The
+        # pack has no TTS dependency; the host supplies its own (JARVIS's TTS).
+        self.tts = tts
         self.project = YouTubeProject(root=self.youtube_dir)
         self.project.ensure()
         self.project.load_state()
@@ -43,9 +46,12 @@ class YouTubePipeline:
             source_catalog: list | None = None,
             approved_learnings: list | None = None,
             render: bool = False, provider: str = "slideshow",
+            narration_file: str = "",
             approved: bool = False, publish: bool = False,
             publish_time: str = "", privacy: str = "",
             verified_sources: list | None = None, probes: dict | None = None,
+            sources: list | None = None, claims: list | None = None,
+            waive: list | None = None, waive_note: str = "",
             evidence: dict | None = None, retention_curves: dict | None = None,
             approve: list | None = None, reject: list | None = None,
             resume: bool = True) -> dict:
@@ -78,10 +84,13 @@ class YouTubePipeline:
             elif name == "script":
                 kwargs = {"topic": topic}
             elif name == "production":
-                kwargs = {"render": render, "provider": provider}
+                kwargs = {"render": render, "provider": provider,
+                          "narration_file": narration_file, "tts": self.tts}
             elif name == "review":
                 kwargs = {"approved": approved,
                           "verified_sources": verified_sources,
+                          "sources": sources, "claims": claims,
+                          "waive": waive, "waive_note": waive_note,
                           "probes": probes}
             elif name == "publish":
                 kwargs = {"approved": approved, "publish": publish,

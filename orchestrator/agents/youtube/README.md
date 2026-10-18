@@ -15,10 +15,20 @@ it in Python on JARVIS's model router.
 | **Publish** | Schedules and uploads approved content | Privacy, timing, final decision |
 | **Learn** | Captures 24-hour and 7-day evidence, measures the configured outcome and economics, then proposes the next move | Choose the KPI and approve or reject each learning before it guides planning |
 
+Narration is real or it is a placeholder: the pack has **no TTS dependency of
+its own**, so the host injects one (`YouTubePipeline(..., tts=my_tts)` where
+`my_tts(text, out_path) -> bool`), passes a ready-made `narration_file`, or
+drops a `narration.wav` into `media/`. JARVIS wires its own TTS in that way.
+
 Placeholders are distinguished from real MP4s: a **simulated** result cannot
 enter the approval or publishing path. No statistic, quote, source or metric is
 ever invented; every factual claim a script makes is recorded in a ledger and
 must be supported by a *verified* source or explicitly waived before publishing.
+
+A blocked ledger is cleared by the reviewer, not the model: pass the reviewed
+`sources` (each `status: "verified"`) and `claims` (each `status: "supported"`
+with `sourceIds`, or `"waived"` with notes), or `waive=[...]` plus a
+`waive_note`. A claim a model merely *says* is fine stays blocked.
 
 ## Use
 

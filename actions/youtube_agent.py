@@ -7,7 +7,7 @@ research → script → production → review → publish → learn — on JARVI
     youtube_agent(action="run", channel={"name": "My Channel",
                   "pillars": ["Home espresso"], "kpi": "watch_time"})
     youtube_agent(action="script", topic="Dialing in a new grinder")
-    youtube_agent(action="production", render=true)          # try a real MP4
+    youtube_agent(action="production", narrate=true)   # JARVIS TTS → real MP4
     youtube_agent(action="review")
     youtube_agent(action="publish", approved=true, publish=true)  # your call
     youtube_agent(action="learn", evidence={"24h": {...}, "7d": {...}})
@@ -22,8 +22,10 @@ loop with a render can take minutes, so a timeout reports honestly.
 """
 from __future__ import annotations
 
+import shutil
 import threading
 import time
+from pathlib import Path
 
 _TIMEOUT_S = 1500          # a full run with a real render is slow
 _QUICK_TIMEOUT_S = 150    # research/script/review/status without a render
@@ -34,7 +36,103 @@ _ACTIONS = {"run", "research", "script", "production", "review", "publish",
 
 def _agent():
     from orchestrator.agents.youtube.youtube_agent import YouTubeAgent
-    return YouTubeAgent()
+    return YouTubeAgent(tts=_jarvis_tts)
+
+
+# ── narration: JARVIS's own TTS, written to a file the pack can mux ──────────
+def _jarvis_tts(text: str, out_path: str) -> bool:
+    """Synthesize narration with whatever TTS JARVIS has, to a WAV file.
+
+    The pack itself has no TTS dependency; this is the host glue. Order:
+    gTTS (JARVIS depends on it) → a system TTS that can write a file. Returns
+    True only when a real, non-trivial audio file was written.
+    """
+    text = " ".join(str(text or "").split())
+    if not text:
+        return False
+    out = Path(out_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    chunks = _chunks(text)
+    if _gtts_to_wav(chunks, out):
+        return True
+
+    for exe in ("espeak-ng", "espeak"):
+        path = shutil.which(exe)
+        if path:
+            return _run([path, "-w", str(out), text[:4000]]) and _nonempty(out)
+    flite = shutil.which("flite")
+    if flite:
+        return _run([flite, "-t", text, "-o", str(out)]) and _nonempty(out)
+    return False
+
+
+def _chunks(text: str, size: int = 180) -> list[str]:
+    """Split narration into TTS-friendly pieces at sentence/space boundaries."""
+    import re
+    pieces, buf = [], ""
+    for part in re.split(r"(?<=[.!?])\s+", text):
+        while len(part) > size:
+            cut = part.rfind(" ", 0, size) or size
+            buf = (buf + " " + part[:cut]).strip()
+            if buf:
+                pieces.append(buf)
+            buf, part = "", part[cut:].lstrip()
+        if len(buf) + len(part) + 1 > size and buf:
+            pieces.append(buf)
+            buf = part
+        else:
+            buf = (buf + " " + part).strip()
+    if buf:
+        pieces.append(buf)
+    return pieces or [text[:size]]
+
+
+def _gtts_to_wav(chunks: list[str], out: Path) -> bool:
+    try:
+        from gtts import gTTS
+    except Exception:
+        return False
+    tmp_dir = out.parent / "_tts"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    mp3s: list[Path] = []
+    try:
+        for i, chunk in enumerate(chunks):
+            mp3 = tmp_dir / f"part{i:03d}.mp3"
+            gTTS(text=chunk, lang="en").save(str(mp3))
+            if not mp3.is_file() or mp3.stat().st_size < 100:
+                return False
+            mp3s.append(mp3)
+    except Exception:
+        return False
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        # No ffmpeg: keep the first mp3 as-is (the pack's muxer needs ffmpeg
+        # anyway, so reaching here means there is nothing to assemble).
+        shutil.copyfile(mp3s[0], out)
+        return _nonempty(out)
+    listing = tmp_dir / "list.txt"
+    listing.write_text("".join(f"file '{p.name}'\n" for p in mp3s),
+                       encoding="utf-8")
+    ok = _run([ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(listing),
+               "-ar", "44100", "-ac", "1", str(out)])
+    for p in mp3s:
+        p.unlink(missing_ok=True)
+    listing.unlink(missing_ok=True)
+    return ok and _nonempty(out)
+
+
+def _run(cmd: list[str]) -> bool:
+    import subprocess
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, timeout=300)
+        return True
+    except Exception:
+        return False
+
+
+def _nonempty(path: Path) -> bool:
+    return path.is_file() and path.stat().st_size > 1000
 
 
 def youtube_agent(parameters: dict, player=None) -> str:
@@ -43,6 +141,10 @@ def youtube_agent(parameters: dict, player=None) -> str:
     channel = p.get("channel") if isinstance(p.get("channel"), dict) else None
     workspace = str(p.get("workspace") or "").strip()
     render = bool(p.get("render") or p.get("build"))
+    narrate = bool(p.get("narrate"))
+    narration_file = str(p.get("narration_file") or "").strip()
+    if narrate or narration_file:
+        render = True
     publish = bool(p.get("publish"))
     approved = bool(p.get("approved"))
 
@@ -64,9 +166,20 @@ def youtube_agent(parameters: dict, player=None) -> str:
     if approved:
         meta["approved"] = True
     for key in ("topic", "count", "publish_time", "privacy", "provider",
-                "steps", "approve", "reject", "verified_sources"):
+                "steps", "approve", "reject", "verified_sources",
+                "narration_file", "waive", "waive_note"):
         if p.get(key) not in (None, "", []):
             meta[key] = p[key]
+    for key in ("sources", "claims"):        # the reviewer's resolved ledger
+        if isinstance(p.get(key), list):
+            meta[key] = p[key]
+    if "resume" in p:
+        meta["resume"] = bool(p.get("resume"))
+    # New reviewer input (a resolved ledger or a waiver) means "re-review":
+    # don't let the resume shortcut skip the stage we were just asked to run.
+    if any(p.get(k) for k in ("sources", "claims", "waive", "waive_note",
+                              "verified_sources")):
+        meta["resume"] = False
     if isinstance(p.get("evidence"), dict):
         meta["evidence"] = p["evidence"]
     if isinstance(p.get("retention_curves"), dict):
@@ -128,9 +241,12 @@ def _help() -> str:
         "Tell me your channel, e.g. youtube_agent(action=\"run\", channel={"
         "\"name\": \"My Channel\", \"audience\": \"…\", \"pillars\": [\"…\"], "
         "\"kpi\": \"watch_time\", \"blocked_topics\": [\"…\"]}).\n"
-        "Actions: run, research, script, production (render=true for a real "
-        "MP4), review, publish (needs approved=true AND publish=true), learn "
-        "(evidence=…, approve=[…]), approve, status.\n"
+        "Actions: run, research, script, production (narrate=true for real "
+        "narration + a rendered MP4), review, publish (needs approved=true AND "
+        "publish=true), learn (evidence=…, approve=[…]), approve, status.\n"
+        "To clear a review blocker, pass the reviewed ledger: sources=[{url, "
+        "status:\"verified\"}], claims=[{text, status:\"supported\", "
+        "sourceIds:[…]}] — or waive=[…] with waive_note=\"…\".\n"
         "You keep control: I never upload without your approval, never publish "
         "a placeholder or an unsupported claim, and never invent a metric."
     )
@@ -175,8 +291,19 @@ TOOL = {
             },
             "render": {
                 "type": "BOOLEAN",
-                "description": "Try to produce a real MP4 (ffmpeg + system "
-                               "TTS). Slow. Default false — plan only."
+                "description": "Produce a real MP4 (ffmpeg). Slow. Default "
+                               "false — plan only."
+            },
+            "narrate": {
+                "type": "BOOLEAN",
+                "description": "Produce real narration with JARVIS's TTS and "
+                               "render a narrated MP4. Implies render=true."
+            },
+            "narration_file": {
+                "type": "STRING",
+                "description": "Path to your own narration audio to mux "
+                               "instead of synthesizing one. Implies "
+                               "render=true."
             },
             "publish": {
                 "type": "BOOLEAN",
@@ -198,6 +325,41 @@ TOOL = {
                 "items": {"type": "STRING"},
                 "description": "Titles of pending learnings to approve, or "
                                "['*'] for all."
+            },
+            "sources": {
+                "type": "ARRAY",
+                "items": {"type": "OBJECT"},
+                "description": "For review: the fact ledger's sources, each "
+                               "{id, url, title, status: verified|pending|"
+                               "rejected}. A claim is only supported by a "
+                               "source marked verified."
+            },
+            "claims": {
+                "type": "ARRAY",
+                "items": {"type": "OBJECT"},
+                "description": "For review: the resolved claims, each {text, "
+                               "riskLevel, status: supported|waived, "
+                               "sourceIds[] or sourceUrls[]}. A 'supported' "
+                               "claim must cite a verified source; a 'waived' "
+                               "claim needs reviewer notes."
+            },
+            "waive": {
+                "type": "ARRAY",
+                "items": {"type": "STRING"},
+                "description": "For review: claim texts (or substrings, or "
+                               "['*']) the reviewer waives. Requires "
+                               "waive_note."
+            },
+            "waive_note": {
+                "type": "STRING",
+                "description": "The reviewer's reason for waiving — required "
+                               "for a waiver to count."
+            },
+            "resume": {
+                "type": "BOOLEAN",
+                "description": "Skip stages already done (default true). "
+                               "Passing sources/claims/waive re-runs review "
+                               "automatically."
             },
             "workspace": {
                 "type": "STRING",

@@ -352,6 +352,140 @@ def test_pipeline_render_produces_real_mp4_when_ffmpeg_present(workspace):
     assert pub["stages"]["publish"]["allowed"] is True
 
 
+def test_pipeline_narration_file_is_real_audio(workspace):
+    if not toolkit.ffmpeg_path():
+        pytest.skip("ffmpeg not installed")
+    import subprocess
+    pipe = YouTubePipeline(workspace, llm=NullLLM())
+    pipe.run(channel=CHANNEL)
+    media = pipe.project.media_dir
+    media.mkdir(parents=True, exist_ok=True)
+    narr = media / "my-narration.wav"
+    subprocess.run([toolkit.ffmpeg_path(), "-y", "-f", "lavfi", "-i",
+                    "sine=frequency=440:duration=1", str(narr)],
+                   check=True, capture_output=True)
+    res = agents.BY_NAME["production"].run(pipe.project, None, render=True,
+                                           narration_file=str(narr))
+    assert res["rendered"]
+    bundle = pipe.project.load_production()
+    assert not bundle["audio"]["simulated"]
+    assert policy.narration_present(bundle)
+    assert any(a["kind"] == "audio" for a in bundle["assets"])
+
+
+def test_pipeline_injected_tts_synthesizes_narration(workspace):
+    if not toolkit.ffmpeg_path():
+        pytest.skip("ffmpeg not installed")
+    import subprocess
+    calls: list[str] = []
+
+    def fake_tts(text, out):
+        calls.append(text[:24])
+        subprocess.run([toolkit.ffmpeg_path(), "-y", "-f", "lavfi",
+                        "-i", "anullsrc=r=44100:cl=mono", "-t", "1", out],
+                       check=True, capture_output=True)
+        return True
+
+    pipe = YouTubePipeline(workspace, llm=NullLLM(), tts=fake_tts)
+    pipe.run(channel=CHANNEL)
+    res = pipe.run(steps=["production"], render=True, resume=False)
+    assert calls, "the injected synthesizer must be called"
+    assert res["stages"]["production"]["rendered"]
+    bundle = pipe.project.load_production()
+    assert bundle["audio"]["provider"] == "jarvis-tts"
+    assert policy.narration_present(bundle)
+
+
+def test_action_exposes_narrate_and_tts_glue():
+    from actions import youtube_agent as yt
+    props = yt.TOOL["parameters"]["properties"]
+    assert "narrate" in props and "narration_file" in props
+    assert yt._jarvis_tts("", "/tmp/opencode/none.wav") is False
+
+
+VERIFIED_SOURCE = {
+    "id": "src_lighting",
+    "url": "https://www.ccohs.ca/oshanswers/ergonomics/lighting/lighting_general.html",
+    "title": "Lighting Ergonomics — General", "status": "verified",
+    "sourceType": "official",
+}
+
+
+def test_claims_from_script_marks_supported_only_for_verified():
+    script = schema.Script(
+        title="T", hook="H", cta="C",
+        claims=[schema.Claim("Appropriate lighting reduces eye fatigue.",
+                             source_urls=[VERIFIED_SOURCE["url"]]),
+                schema.Claim("Uncited assertion.")])
+    got = agents._claims_from_script(script, [VERIFIED_SOURCE])
+    assert got[0]["status"] == "supported"
+    assert got[1]["status"] == "pending"
+    # an unverified source never promotes a claim
+    pending = dict(VERIFIED_SOURCE, status="pending")
+    assert agents._claims_from_script(
+        script, [pending])[0]["status"] == "pending"
+
+
+def test_apply_waivers_needs_a_note_and_matches_a_substring():
+    claims = [{"text": "Alpha claim.", "status": "pending"},
+              {"text": "Beta claim.", "status": "pending"}]
+    assert agents._apply_waivers(claims, ["alpha"], "") == []
+    assert claims[0]["status"] == "pending"
+    done = agents._apply_waivers(claims, ["alpha"], "Checked by hand.")
+    assert done == ["Alpha claim."]
+    assert claims[0]["status"] == "waived" and claims[0]["notes"]
+
+
+def test_review_resolves_claims_with_a_verified_source(workspace):
+    pipe = YouTubePipeline(workspace, llm=NullLLM())
+    pipe.run(channel=CHANNEL)
+    claims = [{"text": "Appropriate lighting reduces eye fatigue.",
+               "riskLevel": "standard", "status": "supported",
+               "sourceIds": ["src_lighting"]}]
+    r = pipe.run(steps=["review"], resume=False, sources=[VERIFIED_SOURCE],
+                 claims=claims)
+    rev = r["stages"]["review"]
+    assert rev["gates"]["provenance_ok"], rev.get("findings")
+    assert rev["provenance_status"] == "verified"
+
+
+def test_review_refuses_a_supported_claim_without_a_verified_source(workspace):
+    pipe = YouTubePipeline(workspace, llm=NullLLM())
+    pipe.run(channel=CHANNEL)
+    claims = [{"text": "A claim.", "status": "supported",
+               "sourceIds": ["src_pending"]}]
+    r = pipe.run(steps=["review"], resume=False,
+                 sources=[dict(VERIFIED_SOURCE, id="src_pending",
+                               status="pending")], claims=claims)
+    rev = r["stages"]["review"]
+    assert rev["ok"] is True                       # the report exists...
+    assert rev["gates"]["provenance_ok"] is False  # ...but the gate blocks
+    assert rev["provenance_status"] == "blocked"
+    assert any("verified source" in f for f in rev["findings"])
+
+
+def test_review_waive_requires_a_note(workspace):
+    pipe = YouTubePipeline(workspace, llm=NullLLM())
+    pipe.run(channel=CHANNEL)
+    claims = [{"text": "Fresh beans taste better.", "status": "pending"}]
+    rev = pipe.run(steps=["review"], resume=False, claims=claims,
+                   waive=["*"], waive_note="")["stages"]["review"]
+    assert rev["gates"]["provenance_ok"] is False
+    assert any("waiv" in f.lower() for f in rev["findings"])
+
+
+def test_review_waive_with_a_note_resolves(workspace):
+    pipe = YouTubePipeline(workspace, llm=NullLLM())
+    pipe.run(channel=CHANNEL)
+    claims = [{"text": "Fresh beans taste better.", "status": "pending"}]
+    rev = pipe.run(steps=["review"], resume=False, claims=claims,
+                   waive=["fresh beans"],
+                   waive_note="Reviewed by hand; freshness is well "
+                              "established.")["stages"]["review"]
+    assert rev["gates"]["provenance_ok"]
+    assert rev["provenance_status"] == "verified"
+
+
 def test_pipeline_learn_measures_and_approves(workspace):
     pipe = YouTubePipeline(workspace, llm=NullLLM())
     pipe.run(channel=CHANNEL)

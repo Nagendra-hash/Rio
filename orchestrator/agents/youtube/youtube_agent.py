@@ -98,8 +98,10 @@ class YouTubeAgent(BaseAgent):
                    "never invents a metric.")
     task_types = (TaskType.YOUTUBE,)
 
-    def __init__(self, llm=None) -> None:
+    def __init__(self, llm=None, tts=None) -> None:
         self._llm = llm if llm is not None else HouseLLM()
+        # An injectable narration synthesizer tts(text, out_path) -> bool.
+        self._tts = tts
 
     # ── entry ────────────────────────────────────────────────────────────
     def handle(self, request: AgentRequest) -> AgentResult:
@@ -153,7 +155,7 @@ class YouTubeAgent(BaseAgent):
         if action == "publish" and meta.get("publish") is None:
             publish = bool(meta.get("approved"))     # "publish" action needs both
 
-        pipe = YouTubePipeline(workspace, llm=self._llm)
+        pipe = YouTubePipeline(workspace, llm=self._llm, tts=self._tts)
         if channel is not None:
             pipe.project.save_channel(channel)
 
@@ -173,10 +175,17 @@ class YouTubeAgent(BaseAgent):
             source_catalog=_as_list(meta.get("source_catalog")),
             approved_learnings=_as_list(meta.get("approved_learnings")),
             render=render, provider=str(meta.get("provider") or "slideshow"),
+            narration_file=str(meta.get("narration_file") or ""),
             approved=approved, publish=publish,
             publish_time=str(meta.get("publish_time") or ""),
             privacy=str(meta.get("privacy") or ""),
             verified_sources=_as_list(meta.get("verified_sources")),
+            sources=meta.get("sources") if isinstance(meta.get("sources"),
+                                                      list) else None,
+            claims=meta.get("claims") if isinstance(meta.get("claims"),
+                                                   list) else None,
+            waive=_as_list(meta.get("waive")),
+            waive_note=str(meta.get("waive_note") or ""),
             evidence=meta.get("evidence") if isinstance(meta.get("evidence"), dict)
             else None,
             retention_curves=meta.get("retention_curves")

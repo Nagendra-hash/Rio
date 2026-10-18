@@ -329,7 +329,8 @@ class ProductionStep:
     role = "generate narration and visuals and assemble a real MP4"
 
     def run(self, project, llm, *, render: bool = False, voice: str = "",
-            provider: str = "slideshow", narration_text: str = "", **_) -> dict:
+            provider: str = "slideshow", narration_text: str = "",
+            narration_file: str = "", tts=None, **_) -> dict:
         project.ensure()
         script = project.load_script()
         scenes = toolkit.scenes_from_script(script, image_provider=provider)
@@ -344,17 +345,31 @@ class ProductionStep:
 
         audio: dict = {}
         narration = narration_text or script.full_text()
-        if render and narration and toolkit.which_tts():
-            wav = project.media_dir / "narration.wav"
-            if _synthesize(narration, wav, voice=voice):
-                audio = {"path": str(wav), "provider": toolkit.which_tts(),
+        # Narration priority: your own file > one already in media/ > the
+        # injected synthesizer (JARVIS's TTS) > a system TTS > an honest
+        # placeholder. A real file is real narration; a placeholder never is.
+        if render:
+            provided = _existing_file(narration_file, project) \
+                or _existing_media_narration(project)
+            if provided:
+                audio = {"path": str(provided), "provider": "provided",
+                         "license": "generated", "simulated": False}
+        if render and not audio and narration and tts is not None:
+            dest = project.media_dir / "narration.wav"
+            if _synth_call(tts, narration, dest):
+                audio = {"path": str(dest), "provider": "jarvis-tts",
+                         "license": "generated", "simulated": False}
+        if render and not audio and narration and toolkit.which_tts():
+            dest = project.media_dir / "narration.wav"
+            if _synthesize(narration, dest, voice=voice):
+                audio = {"path": str(dest), "provider": toolkit.which_tts(),
                          "license": "generated", "simulated": False}
         if not audio:
             audio = {"path": "", "provider": "", "license": "generated",
                      "simulated": True,
-                     "notes": "No TTS provider available — narration is a "
-                              "placeholder. Record or configure TTS, or set "
-                              "intentional silence explicitly."}
+                     "notes": "No narration was produced — this is a "
+                              "placeholder. Record it, pass a narration file, "
+                              "or record intentional silence explicitly."}
         intentional_silence = bool(audio.get("simulated")) and bool(
             narration_text == "__silent__")
 
@@ -376,6 +391,15 @@ class ProductionStep:
                      "notes": ("Plan only (render=False) or no ffmpeg/TTS "
                                "available in this environment. A simulated "
                                "result may NOT be published.")}
+        if audio.get("path"):
+            assets.append(schema.Asset(kind="audio", path=audio["path"],
+                                       provider=audio.get("provider", ""),
+                                       license="generated", generated=True,
+                                       simulated=bool(audio.get("simulated"))))
+        if final.get("path"):
+            assets.append(schema.Asset(kind="video", path=final["path"],
+                                       provider=final.get("provider", ""),
+                                       license="generated", generated=True))
 
         bundle = schema.ProductionBundle(
             id=f"prod_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
@@ -398,6 +422,33 @@ class ProductionStep:
                             else "plan written (simulated — cannot publish "
                                  "until a real render exists)")),
                 "simulated": not rendered}
+
+
+def _synth_call(tts, text: str, out: Path) -> bool:
+    """Run an injected synthesizer ``tts(text, out_path) -> bool`` safely."""
+    try:
+        ok = tts(text, str(out))
+        return bool(ok) and out.is_file() and out.stat().st_size > 100
+    except Exception:
+        return False
+
+
+def _existing_file(value: str | None, project) -> Path | None:
+    if not value:
+        return None
+    p = Path(str(value)).expanduser()
+    if not p.is_absolute():
+        p = project.root.parent / str(value)
+    return p if p.is_file() and p.stat().st_size > 100 else None
+
+
+def _existing_media_narration(project) -> Path | None:
+    for name in ("narration.wav", "narration.mp3", "narration.m4a",
+                 "narration.aac", "narration.ogg"):
+        p = project.media_dir / name
+        if p.is_file() and p.stat().st_size > 100:
+            return p
+    return None
 
 
 def _synthesize(text: str, out: Path, voice: str = "") -> bool:
@@ -448,6 +499,7 @@ class ReviewStep:
     def run(self, project, llm, *, approved: bool = False,
             verified_sources: list | None = None,
             sources: list | None = None, claims: list | None = None,
+            waive: list | None = None, waive_note: str = "",
             probes: dict | None = None, **_) -> dict:
         project.ensure()
         ch = project.load_channel()
@@ -459,7 +511,10 @@ class ReviewStep:
         # ── provenance ───────────────────────────────────────────────────
         prov_sources = sources if sources is not None else _sources_from_research(
             research, verified_sources)
-        prov_claims = claims if claims is not None else _claims_from_script(script)
+        prov_claims = (list(claims) if claims is not None
+                       else _claims_from_script(script, prov_sources))
+        waive_note = str(waive_note or "").strip()
+        waived = _apply_waivers(prov_claims, waive, waive_note)
         prov = toolkit.build_provenance(
             prov_sources, prov_claims,
             contains_synthetic_media=bool(bundle.get("containsSyntheticMedia")))
@@ -496,6 +551,11 @@ class ReviewStep:
         if not gates["provenance_ok"]:
             findings.append("Unresolved factual claims — verify their sources "
                             "or waive them with a note.")
+        if prov.get("error"):
+            findings.append(f"Fact ledger rejected the input: {prov['error']}")
+        if waive and not waive_note and not waived:
+            findings.append("Waiving a claim requires a reviewer note — "
+                            "nothing was waived.")
         if ready.get("status") == "failed":
             findings.append("Readiness failed: "
                             + ", ".join(ready.get("blockingFailures") or []))
@@ -536,10 +596,40 @@ def _sources_from_research(research: schema.Research,
     return out
 
 
-def _claims_from_script(script: schema.Script) -> list[dict]:
-    return [{"text": c.text, "riskLevel": c.risk_level,
-             "sourceUrls": c.source_urls, "status": "pending"}
-            for c in script.claims]
+def _claims_from_script(script: schema.Script,
+                        sources: list | None = None) -> list[dict]:
+    """The script's claims, marked ``supported`` when the reviewer has already
+    verified a source the claim cites. Nothing is ever auto-waived."""
+    verified = {s.get("url") for s in (sources or [])
+                if str(s.get("status")) == "verified"}
+    out: list[dict] = []
+    for c in script.claims:
+        urls = [u for u in (c.source_urls or []) if u]
+        status = ("supported" if urls and any(u in verified for u in urls)
+                  else "pending")
+        out.append({"text": c.text, "riskLevel": c.risk_level,
+                    "sourceUrls": urls, "status": status})
+    return out
+
+
+def _apply_waivers(claims: list[dict], waive: list | None,
+                   note: str) -> list[str]:
+    """Waive the claims a reviewer names (exact text, a substring, or ``*``).
+
+    A waiver is only valid with a note, so an empty note waives nothing — the
+    claims stay open and the review surfaces why. Returns the waived texts.
+    """
+    wanted = [str(w).strip() for w in (waive or []) if str(w).strip()]
+    if not wanted or not note:
+        return []
+    done: list[str] = []
+    for c in claims:
+        text = str(c.get("text") or "")
+        if any(w == "*" or w.lower() in text.lower() for w in wanted):
+            c["status"] = "waived"
+            c["notes"] = note
+            done.append(text)
+    return done
 
 
 def _studio_html(script: schema.Script, seo: schema.SEO, prov: dict,
