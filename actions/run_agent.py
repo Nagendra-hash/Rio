@@ -45,6 +45,8 @@ _ALIASES = {
     "lead": "lead_agent", "marketing": "marketing_agent",
     "news": "news_agent", "plan": "plan_agent",
     "replica": "replica_agent", "clone": "replica_agent",
+    "youtube": "youtube_agent", "yt": "youtube_agent",
+    "channel": "youtube_agent",
 }
 
 

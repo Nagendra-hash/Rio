@@ -1367,6 +1367,7 @@ def _get_router():
 # registry hard-limits to on-machine models — see capabilities.py).
 _TASK_TO_MTASK = {
     "coding": "simple_coding", "replica": "simple_coding",
+    "youtube": "simple_coding",
     "research": "research",
     "trading": "difficult_reasoning", "system": "light_reasoning",
     "rag": "private", "health": "private", "finance": "private",

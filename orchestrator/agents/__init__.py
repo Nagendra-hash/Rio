@@ -48,6 +48,8 @@ MARKETING_AGENT = "marketing_agent"
 NEWS_AGENT = "news_agent"
 # Phase 20 clean-room app rebuilds (replica pack).
 REPLICA_AGENT = "replica_agent"
+# Phase 21 YouTube automation (research → … → learn).
+YOUTUBE_AGENT = "youtube_agent"
 
 
 def _rag_agent():
@@ -279,6 +281,14 @@ def build_default_registry() -> AgentRegistry:
          "or branding (Phase 20).",
          (TaskType.REPLICA,),
          "orchestrator.agents.replica.replica_agent", "ReplicaAgent"),
+        ("JARVIS_YOUTUBE_AGENT", YOUTUBE_AGENT,
+         "YouTube automation: research topics, write the script and metadata, "
+         "produce narration and visuals, run quality and fact checks, schedule "
+         "and (only with explicit approval) publish, then learn from the "
+         "results and propose the next move. Never uploads without approval, "
+         "never publishes a placeholder, never invents a metric (Phase 21).",
+         (TaskType.YOUTUBE,),
+         "orchestrator.agents.youtube.youtube_agent", "YouTubeAgent"),
     )
     for env_gate, agent_name, blurb, types, module, cls in _gated:
         stub = StubAgent(agent_name, blurb, task_types=types)
@@ -300,6 +310,6 @@ __all__ = [
     "BRIEFING_AGENT", "MEAL_AGENT", "TRAVEL_AGENT", "FINANCE_AGENT",
     "STUDY_AGENT", "METAQUEST_AGENT", "LEGAL_AGENT", "SQL_AGENT",
     "SELF_EVAL_AGENT", "LEAD_AGENT", "MARKETING_AGENT", "NEWS_AGENT",
-    "REPLICA_AGENT",
+    "REPLICA_AGENT", "YOUTUBE_AGENT",
     "StubAgent", "stubs", "build_default_registry",
 ]

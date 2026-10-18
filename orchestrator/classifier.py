@@ -40,6 +40,25 @@ _REPLICA_RE = re.compile(
     + r"|\breplica\s+agent\b",
     re.IGNORECASE)
 
+# ── YOUTUBE (Phase 21 channel automation: research → … → learn) ──────────────
+# Deliberately requires channel/video-production vocabulary — NOT a bare
+# "youtube" — so "play this youtube video" or "search youtube for music" stay
+# with the assistant/music lanes: only a channel/content ask lands here.
+_YOUTUBE_RE = re.compile(
+    r"\b(?:my|our)\s+(?:youtube\s+)?channel\b"
+    + r"|\bcontent\s+strategy\b"
+    + r"|\b(?:make|create|produce|film|record|publish|upload|schedule)\b"
+      r"[^.?!\n]{0,40}\b(?:video|videos|short|shorts|thumbnail|voiceover|"
+      r"narration)\b"
+    + r"|\b(?:video|shorts?)\s+(?:ideas?|script|scripts|hook|thumbnail|"
+      r"metadata|seo)\b"
+    + r"|\b(?:subscribers?|watch\s?time|viewership|monetiz\w+)\b"
+      r"[^.?!\n]{0,30}\b(?:youtube|channel|video)\b"
+    + r"|\b(?:youtube|channel|video)\b[^.?!\n]{0,30}?"
+      r"\b(?:subscribers?|watch\s?time|analytics|retention|thumbnail|script)\b"
+    + r"|\byoutube\s+agent\b|\byoutube\s+automation\b",
+    re.IGNORECASE)
+
 # ── CODING ────────────────────────────────────────────────────────────────────
 _CODE_NOUNS = (r"code|bug|traceback|stack\s?trace|exception|error\s+message|"
                r"function|class|method|variable|refactor|unit\s?tests?|pytest|"
@@ -272,14 +291,14 @@ _EXPLICIT_RE = re.compile(
     r"\b(coding|code|replica|clone|research|trading|trader|rag|docs?|system|email|"
     r"calendar|health|briefing|news|meal|travel|finance|study|tutor|"
     r"meta\s?quest|quest|legal|sql|lead|leads|marketing|campaign|"
-    r"self\s?eval|retro)\s+agent\b"
+    r"self\s?eval|retro|youtube)\s+agent\b"
     r"|\b(?:route|send|forward|hand)\s+(?:this|it)\s+to\s+(?:the\s+)?"
     r"(coding|replica|research|trading|rag|system|email|calendar|health|"
     r"briefing|news|meal|travel|finance|study|tutor|meta\s?quest|quest|legal|"
-    r"sql|lead|leads|marketing|campaign|self\s?eval|retro)\b"
+    r"sql|lead|leads|marketing|campaign|self\s?eval|retro|youtube)\b"
     r"|\[\s*(coding|replica|research|trading|rag|system|email|calendar|health|"
     r"briefing|news|meal|travel|finance|study|tutor|meta\s?quest|quest|legal|"
-    r"sql|lead|leads|marketing|campaign|self\s?eval|retro)\s*\]",
+    r"sql|lead|leads|marketing|campaign|self\s?eval|retro|youtube)\s*\]",
     re.IGNORECASE)
 
 _EXPLICIT_MAP = {
@@ -303,6 +322,7 @@ _EXPLICIT_MAP = {
     "lead": TaskType.LEAD_SCORE, "leads": TaskType.LEAD_SCORE,
     "lead score": TaskType.LEAD_SCORE, "marketing": TaskType.MARKETING,
     "campaign": TaskType.MARKETING,
+    "youtube": TaskType.YOUTUBE,
 }
 
 # Greetings / chit-chat / control words must never match a task lane.
@@ -335,6 +355,7 @@ class IntentClassifier:
         (TaskType.TRADING, _TRADING_RE),
         (TaskType.RAG, _RAG_RE),
         (TaskType.REPLICA, _REPLICA_RE),
+        (TaskType.YOUTUBE, _YOUTUBE_RE),
         (TaskType.CODING, _CODING_RE),
         (TaskType.SYSTEM, _SYS_RE),
         (TaskType.EMAIL, _EMAIL_RE),

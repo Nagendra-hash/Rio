@@ -57,6 +57,8 @@ class TaskType(str, Enum):
     NEWS = "news"
     # Phase 20 clean-room app rebuilds (replica pack).
     REPLICA = "replica"
+    # Phase 21 YouTube automation (research → … → learn).
+    YOUTUBE = "youtube"
     _FALLBACK = "fallback"
 
 
