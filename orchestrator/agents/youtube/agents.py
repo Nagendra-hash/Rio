@@ -506,14 +506,17 @@ class ReviewStep:
         project.save_review(review, prov)
         project.write(project.studio_html, _studio_html(script, seo, prov, audit,
                                                         ready, gates))
-        ok = gates["readiness_ok"] and gates["provenance_ok"] and gates["metadata_ok"]
-        project.mark(self.name, ok,
+        # The stage COMPLETED (the report exists); ``ready`` is the publish
+        # decision. A run that needs the human is not a failed run.
+        ready_to_ship = bool(gates) and all(gates.values())
+        project.mark(self.name, ready_to_ship,
                      "gates: " + ", ".join(f"{k}={'ok' if v else 'x'}"
                                            for k, v in gates.items()))
-        return {"stage": self.name, "ok": ok, "review": review,
-                "ready_for_approval": ok and gates["real_video"] and gates["narration"],
-                "note": ("review ready" if ok else "review found blockers")
-                        + (f"; {len(findings)} item(s) need a human"
+        return {"stage": self.name, "ok": True, "ready": ready_to_ship,
+                "review": review, "ready_for_approval": ready_to_ship,
+                "note": ("review ready" if ready_to_ship
+                         else "review done — blockers need a human")
+                        + (f"; {len(findings)} item(s) to resolve"
                            if findings else ""),
                 "gates": gates, "findings": findings,
                 "readiness_status": ready.get("status"),
@@ -625,7 +628,7 @@ class PublishStep:
         project.save_publish(entry)
         project.mark(self.name, decision.allowed,
                      entry.status + (" (uploaded)" if entry.uploaded else ""))
-        return {"stage": self.name, "ok": decision.allowed, "entry": entry,
+        return {"stage": self.name, "ok": True, "entry": entry,
                 "allowed": decision.allowed, "violations": decision.violations,
                 "note": (f"publish is {'ALLOWED' if decision.allowed else 'BLOCKED'}"
                          f" — status: {entry.status}"),

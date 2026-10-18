@@ -207,7 +207,8 @@ class YouTubeAgent(BaseAgent):
 
     def _render(self, result: dict, action: str, publish: bool) -> str:
         lines = [f"[youtube_agent] action '{action}' → "
-                 f"{'ok' if result.get('ok') else 'not complete'}"]
+                 f"{'ok' if result.get('ok') else 'not complete'}"
+                 f" | ready to publish: {'yes' if result.get('ready') else 'no'}"]
         if result.get("channel_name"):
             lines.append(f"Channel: {result['channel_name']}")
         lines.append(f"Workspace: {result.get('youtube_dir') or result.get('workspace')}")
@@ -216,7 +217,12 @@ class YouTubeAgent(BaseAgent):
             st = stages.get(name)
             if not st:
                 continue
-            mark = "✓" if st.get("ok") else "•"
+            if name == "review":
+                mark = "✓" if st.get("ready") else "•"
+            elif name == "publish":
+                mark = "✓" if st.get("allowed") else "•"
+            else:
+                mark = "✓" if st.get("ok") else "•"
             lines.append(f"  {mark} {name}: {str(st.get('note', ''))[:170]}")
         review = stages.get("review") or {}
         if review.get("gates"):

@@ -309,6 +309,11 @@ def test_pipeline_offline_runs_every_stage(workspace):
     assert result["stages"]["script"]["ok"]
     assert result["stages"]["production"]["ok"]
     assert result["stages"]["review"]["ok"]
+    # The run COMPLETED (artifacts written) even though it is not yet
+    # publishable (no real render) — a human-blocked run is not a failed run.
+    assert result["ok"] is True
+    assert result["ready"] is False
+    assert result["stages"]["review"]["ready"] is False
     # every artifact is written
     names = {Path(a).name for a in result["artifacts"]}
     for required in ("research.md", "script.md", "seo.json", "production.md",
@@ -389,6 +394,7 @@ def test_agent_run_action_completes(workspace):
     res = agent.handle(req)
     assert res.status is TaskStatus.COMPLETED
     assert "youtube_agent" in res.text
+    assert "ready to publish: no" in res.text      # honest about the gate
 
 
 def test_agent_denies_fabrication(workspace):

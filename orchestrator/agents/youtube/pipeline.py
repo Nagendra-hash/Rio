@@ -98,13 +98,16 @@ class YouTubePipeline:
 
         decided = all(results[n].get("ok") for n in wanted
                       if n in results and n not in ("publish", "learn"))
+        ready = bool((results.get("review") or {}).get("ready"))
         if publish and "publish" in results:
-            ok = bool(results["publish"].get("allowed"))
+            ok = bool(results["publish"].get("ok"))
+            ready = bool(results["publish"].get("allowed"))
         else:
             ok = decided
         self.project.save_state()
         return {
             "ok": ok,
+            "ready": ready,
             "workspace": str(self.workspace),
             "youtube_dir": str(self.youtube_dir),
             "channel_name": self.project.channel_name,
@@ -137,6 +140,11 @@ class YouTubePipeline:
 def _summary_note(results: dict, publish: bool) -> str:
     parts = [f"{n}:{'ok' if (results.get(n) or {}).get('ok') else 'x'}"
              for n in ORDER if n in results]
-    if "publish" not in results:
+    if "publish" in results:
+        parts.append("publish:" + ("allowed" if results["publish"].get("allowed")
+                                   else "blocked"))
+    else:
+        ready = bool((results.get("review") or {}).get("ready"))
+        parts.append("READY to publish" if ready else "NOT ready yet (see review)")
         parts.append("(publish not run — it needs approved=True and publish=True)")
     return " ".join(parts)
