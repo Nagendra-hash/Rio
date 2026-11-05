@@ -21,6 +21,7 @@ off by default.
 Every probe owns its hard timeout and swallows its own exceptions: a health
 check must never hang the audio loop or crash the tool dispatcher.
 """
+
 from __future__ import annotations
 
 import json
@@ -33,15 +34,15 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
-_HOME        = Path.home()   # same convention as actions/hermes_task.py
-_ENV_FILE    = _HOME / ".hermes" / ".env"
+_HOME = Path.home()  # same convention as actions/hermes_task.py
+_ENV_FILE = _HOME / ".hermes" / ".env"
 _CONFIG_FILE = _HOME / ".hermes" / "config.yaml"
-_PID_FILE    = _HOME / ".hermes" / "gateway.pid"
-_HERMES      = shutil.which("hermes") or str(_HOME / ".local" / "bin" / "hermes")
+_PID_FILE = _HOME / ".hermes" / "gateway.pid"
+_HERMES = shutil.which("hermes") or str(_HOME / ".local" / "bin" / "hermes")
 
-_HTTP_TIMEOUT   = 6    # seconds per HTTP probe
-_CMD_TIMEOUT    = 6    # seconds per subprocess probe
-_DEEP_TIMEOUT   = 120  # seconds for the full agent turn (deep=True)
+_HTTP_TIMEOUT = 6  # seconds per HTTP probe
+_CMD_TIMEOUT = 6  # seconds per subprocess probe
+_DEEP_TIMEOUT = 120  # seconds for the full agent turn (deep=True)
 _JOURNAL_WINDOW = "15 min"
 
 # Gold API updatedAt older than this = the feed is serving a frozen snapshot
@@ -55,9 +56,17 @@ def _env() -> dict:
     context without it."""
     env = dict(os.environ)
     env.setdefault("HOME", str(_HOME))
-    env.setdefault("PATH", os.pathsep.join([
-        str(_HOME / ".local" / "bin"), "/usr/local/bin", "/usr/bin", "/bin",
-    ]))
+    env.setdefault(
+        "PATH",
+        os.pathsep.join(
+            [
+                str(_HOME / ".local" / "bin"),
+                "/usr/local/bin",
+                "/usr/bin",
+                "/bin",
+            ]
+        ),
+    )
     env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
     return env
 
@@ -83,26 +92,39 @@ def _http_get_json(url: str, headers: dict | None = None) -> tuple[bool, str]:
         return True, data
     except urllib.error.HTTPError as e:
         return False, f"HTTP {e.code}"
-    except Exception as e:                     # DNS, timeout, refused…
+    except Exception as e:  # DNS, timeout, refused…
         return False, str(e)[:80] or type(e).__name__
 
 
 # ---------------------------------------------------------------- probes ----
 
+
 def _probe_gateway() -> tuple[bool, str]:
     try:
         proc = subprocess.run(
             ["systemctl", "--user", "is-active", "hermes-gateway"],
-            capture_output=True, text=True, timeout=_CMD_TIMEOUT, env=_env(),
+            capture_output=True,
+            text=True,
+            timeout=_CMD_TIMEOUT,
+            env=_env(),
         )
         state = (proc.stdout or "").strip() or "unknown"
         if state == "active":
             since = ""
             try:
                 p2 = subprocess.run(
-                    ["systemctl", "--user", "show", "hermes-gateway",
-                     "--property=ActiveEnterTimestamp", "--value"],
-                    capture_output=True, text=True, timeout=_CMD_TIMEOUT, env=_env(),
+                    [
+                        "systemctl",
+                        "--user",
+                        "show",
+                        "hermes-gateway",
+                        "--property=ActiveEnterTimestamp",
+                        "--value",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=_CMD_TIMEOUT,
+                    env=_env(),
                 )
                 since = (p2.stdout or "").strip()
             except Exception:
@@ -113,7 +135,7 @@ def _probe_gateway() -> tuple[bool, str]:
         return _probe_gateway_pidfile()
     except FileNotFoundError:
         return _probe_gateway_pidfile()
-    except Exception as e:
+    except Exception:
         return _probe_gateway_pidfile()
 
 
@@ -129,12 +151,17 @@ def _probe_gateway_pidfile() -> tuple[bool, str]:
 def _probe_bridge() -> tuple[bool, str]:
     try:
         proc = subprocess.run(
-            [_HERMES, "--version"], capture_output=True, text=True,
-            timeout=_CMD_TIMEOUT, env=_env(),
+            [_HERMES, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=_CMD_TIMEOUT,
+            env=_env(),
         )
         first = (proc.stdout or proc.stderr or "").strip().splitlines()
-        return (proc.returncode == 0 and bool(first),
-                first[0][:60] if first else f"exit {proc.returncode}")
+        return (
+            proc.returncode == 0 and bool(first),
+            first[0][:60] if first else f"exit {proc.returncode}",
+        )
     except FileNotFoundError:
         return False, "hermes CLI not found"
     except subprocess.TimeoutExpired:
@@ -155,35 +182,103 @@ def _probe_telegram() -> tuple[bool, str]:
     username = (data.get("result") or {}).get("username", "?")
     # API reachable ≠ gateway polling loop healthy. Check the journal for
     # fresh Telegram errors (tonight's DNS outage looked exactly like this).
-    errs = _recent_gateway_telegram_errors()
-    if errs:
-        return False, f"@{username} reachable, but gateway logged {errs} Telegram error(s) in {_JOURNAL_WINDOW}"
+    # A transport flap that recovered is NOT an outage: the state machine
+    # resets on the recovery line and reports the flap as a note.
+    unresolved, recovered = _recent_gateway_telegram_errors()
+    if unresolved:
+        return False, (
+            f"@{username} reachable, but the gateway has "
+            f"{unresolved} unrecovered Telegram error(s) in "
+            f"{_JOURNAL_WINDOW}"
+        )
+    if recovered:
+        return True, (
+            f"@{username} reachable; {recovered} transport flap(s) "
+            f"recovered in {_JOURNAL_WINDOW} — polling is healthy"
+        )
     return True, f"@{username} reachable, no gateway errors in {_JOURNAL_WINDOW}"
 
 
-def _recent_gateway_telegram_errors() -> int:
+def _recent_gateway_telegram_errors() -> tuple[int, int]:
+    """Return (unresolved_errors, recovered_flaps) from the gateway journal.
+
+    Recovery-aware: a failure increments the unresolved count, while a
+    recovery/healthy line resets it and records the flap. Counting every
+    historical "failed" line would leave a permanent false ERROR after a
+    transient DNS/transport failure that already healed.
+    """
     try:
         proc = subprocess.run(
-            ["journalctl", "--user", "-u", "hermes-gateway",
-             "--since", f"-{_JOURNAL_WINDOW}", "--no-pager"],
-            capture_output=True, text=True, timeout=_CMD_TIMEOUT + 2, env=_env(),
+            [
+                "journalctl",
+                "--user",
+                "-u",
+                "hermes-gateway",
+                "--since",
+                f"-{_JOURNAL_WINDOW}",
+                "--no-pager",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=_CMD_TIMEOUT + 2,
+            env=_env(),
         )
-        return sum(
-            1 for line in (proc.stdout or "").splitlines()
-            if "Telegram" in line and ("ERROR" in line.upper()
-                                       or "failed" in line.lower()
-                                       or "reconnect" in line.lower())
-        )
+        unresolved = 0
+        recovered = 0
+        for line in (proc.stdout or "").splitlines():
+            if "Telegram" not in line:
+                continue
+            low = line.lower()
+            # Check recovery first: "reconnect successful" and "connected
+            # (polling mode)" also contain failure-ish words.
+            is_recovery = any(
+                marker in low
+                for marker in (
+                    "connected to telegram",
+                    "using sticky",
+                    "recovered",
+                    "recovery successful",
+                    "recovery complete",
+                    "polling again",
+                    "polling is healthy",
+                    "reconnect successful",
+                    "reconnected",
+                    "back online",
+                )
+            )
+            if is_recovery:
+                if unresolved:
+                    recovered += unresolved
+                    unresolved = 0
+                continue
+            is_failure = any(
+                marker in low
+                for marker in (
+                    "error",
+                    "failed",
+                    "failure",
+                    "reconnect",
+                    "timeout",
+                    "timed out",
+                    "disconnected",
+                    "getupdates",
+                    "connecterror",
+                )
+            )
+            if is_failure:
+                unresolved += 1
+        return unresolved, recovered
     except Exception:
-        return 0    # journal unavailable — don't fail the probe for it
+        return 0, 0  # journal unavailable — don't fail the probe for it
 
 
 def _probe_llm() -> tuple[bool, str]:
     key = _read_env_var("OPENROUTER_API_KEY")
     if not key:
         return False, "no OPENROUTER_API_KEY in ~/.hermes/.env"
-    ok, data = _http_get_json("https://openrouter.ai/api/v1/key",
-                              headers={"Authorization": f"Bearer {key}"})
+    ok, data = _http_get_json(
+        "https://openrouter.ai/api/v1/key", headers={"Authorization": f"Bearer {key}"}
+    )
     if not ok:
         return False, f"OpenRouter unreachable: {data}"
     return True, "OpenRouter key valid"
@@ -192,7 +287,8 @@ def _probe_llm() -> tuple[bool, str]:
 def _probe_fallback() -> tuple[bool, str]:
     try:
         configured = "fallback_providers:" in _CONFIG_FILE.read_text(
-            encoding="utf-8", errors="ignore")
+            encoding="utf-8", errors="ignore"
+        )
     except OSError:
         return False, "config.yaml unreadable"
     if not configured:
@@ -200,8 +296,10 @@ def _probe_fallback() -> tuple[bool, str]:
     key = _read_env_var("GEMINI_API_KEY")
     if not key:
         return False, "fallback configured but no GEMINI_API_KEY"
-    ok, data = _http_get_json("https://generativelanguage.googleapis.com/v1beta/models",
-                              headers={"x-goog-api-key": key})
+    ok, data = _http_get_json(
+        "https://generativelanguage.googleapis.com/v1beta/models",
+        headers={"x-goog-api-key": key},
+    )
     if not ok:
         return False, f"Gemini fallback unreachable: {data}"
     n = len((data or {}).get("models", []))
@@ -217,8 +315,16 @@ def _probe_price_sources() -> tuple[bool, str]:
     binance_px = None
     gecko_px = None
 
-    # 1. Binance spot ticker (crypto backbone)
-    ok, data = _http_get_json("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT")
+    # 1. Binance spot ticker (crypto backbone). data-api.binance.vision is
+    # Binance's official READ-ONLY market-data mirror — the same REST surface.
+    # It matters here because api.binance.com is DPI-blocked by the home ISP
+    # (Binance is PMLA-unregistered in India): curl/urllib hang on connect
+    # while every other endpoint (Google, CoinGecko, OpenRouter) answers fine
+    # — confirmed by trial on 2026-11-03, data-api.binance.vision answered
+    # 4/4 while api.binance.com timed out on every attempt.
+    ok, data = _http_get_json(
+        "https://data-api.binance.vision/api/v3/ticker/price?symbol=BTCUSDT"
+    )
     if not ok:
         problems.append(f"Binance unreachable: {data}")
     else:
@@ -236,7 +342,9 @@ def _probe_price_sources() -> tuple[bool, str]:
     else:
         try:
             xau = float(data["price"])
-            updated = datetime.strptime(str(data["updatedAt"]), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+            updated = datetime.strptime(
+                str(data["updatedAt"]), "%Y-%m-%dT%H:%M:%SZ"
+            ).replace(tzinfo=timezone.utc)
             age_s = (datetime.now(timezone.utc) - updated).total_seconds()
             if xau <= 0:
                 problems.append("Gold API returned non-positive price")
@@ -246,7 +354,9 @@ def _probe_price_sources() -> tuple[bool, str]:
             problems.append(f"Gold API malformed: {str(data)[:50]}")
 
     # 3. CoinGecko (crypto fallback) + BTC cross-source consistency
-    ok, data = _http_get_json("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd")
+    ok, data = _http_get_json(
+        "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
+    )
     if not ok:
         problems.append(f"CoinGecko unreachable: {data}")
     else:
@@ -255,8 +365,14 @@ def _probe_price_sources() -> tuple[bool, str]:
         except (KeyError, TypeError, ValueError):
             problems.append(f"CoinGecko malformed: {str(data)[:50]}")
 
-    if binance_px and gecko_px and abs(binance_px - gecko_px) / min(binance_px, gecko_px) > 0.05:
-        problems.append(f"BTC sources disagree: Binance {binance_px:.0f} vs CoinGecko {gecko_px:.0f}")
+    if (
+        binance_px
+        and gecko_px
+        and abs(binance_px - gecko_px) / min(binance_px, gecko_px) > 0.05
+    ):
+        problems.append(
+            f"BTC sources disagree: Binance {binance_px:.0f} vs CoinGecko {gecko_px:.0f}"
+        )
 
     if problems:
         return False, "; ".join(problems)
@@ -271,8 +387,9 @@ def _probe_freellmapi() -> tuple[bool, str]:
     key = _read_env_var("FREELLMAPI_API_KEY")
     if not key:
         return False, "no FREELLMAPI_API_KEY in ~/.hermes/.env"
-    ok, data = _http_get_json("http://127.0.0.1:3001/v1/models",
-                              headers={"Authorization": f"Bearer {key}"})
+    ok, data = _http_get_json(
+        "http://127.0.0.1:3001/v1/models", headers={"Authorization": f"Bearer {key}"}
+    )
     if not ok:
         return False, f"router unreachable (is freellmapi.service up?): {data}"
     n = len((data or {}).get("data", []))
@@ -285,7 +402,10 @@ def _probe_deep() -> tuple[bool, str]:
     try:
         proc = subprocess.run(
             [_HERMES, "-z", "Reply with exactly: HEALTH_OK"],
-            capture_output=True, text=True, timeout=_DEEP_TIMEOUT, env=_env(),
+            capture_output=True,
+            text=True,
+            timeout=_DEEP_TIMEOUT,
+            env=_env(),
         )
         out = (proc.stdout or "").strip()
         if proc.returncode == 0 and out:
@@ -299,14 +419,15 @@ def _probe_deep() -> tuple[bool, str]:
 
 # --------------------------------------------------------------- handler ----
 
+
 def hermes_health(parameters: dict, player=None) -> str:
     parameters = parameters or {}
     deep = str(parameters.get("deep", "")).strip().lower() in ("true", "yes", "1")
 
     jobs = {
-        "Gateway":   _probe_gateway,
+        "Gateway": _probe_gateway,
         "Bridge CLI": _probe_bridge,
-        "Telegram":  _probe_telegram,
+        "Telegram": _probe_telegram,
         "LLM primary": _probe_llm,
         "LLM fallback": _probe_fallback,
         "FreeLLMAPI router": _probe_freellmapi,
@@ -319,7 +440,7 @@ def hermes_health(parameters: dict, player=None) -> str:
         results = dict(zip(jobs, pool.map(lambda fn: fn(), jobs.values())))
 
     passed = sum(1 for ok, _ in results.values() if ok)
-    total  = len(results)
+    total = len(results)
 
     lines = [f"Hermes health — {passed}/{total} checks passed:"]
     for name, (ok, detail) in results.items():
@@ -329,7 +450,7 @@ def hermes_health(parameters: dict, player=None) -> str:
     if not broken:
         verdict = "Verdict: Hermes is fully connected."
     elif "Gateway" in broken and len(broken) == total - 1:
-        verdict = f"Verdict: Hermes is DOWN — gateway not running. Start it with: systemctl --user start hermes-gateway"
+        verdict = "Verdict: Hermes is DOWN — gateway not running. Start it with: systemctl --user start hermes-gateway"
     elif broken:
         verdict = f"Verdict: Hermes is partially connected — problem with: {', '.join(broken)}."
     lines.append(verdict)
@@ -351,10 +472,10 @@ TOOL = {
         "properties": {
             "deep": {
                 "type": "STRING",
-                "description": "Optional: 'true' also runs one real end-to-end agent turn (~30s) to prove the full loop works."
+                "description": "Optional: 'true' also runs one real end-to-end agent turn (~30s) to prove the full loop works.",
             }
         },
-        "required": []
+        "required": [],
     },
     "handler": hermes_health,
 }
