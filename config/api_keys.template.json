@@ -1,0 +1,20 @@
+{
+ "_comment": "TEMPLATE ONLY \u2014 copy to config/api_keys.json and fill in your own keys. NEVER commit the real file (it is gitignored). Every value below is a placeholder.",
+ "gemini_api_key": "PASTE_YOUR_GEMINI_KEY_HERE",
+ "gemini_api_keys": [
+  "PASTE_YOUR_GEMINI_KEY_HERE"
+ ],
+ "openrouter_keys": [
+  "PASTE_YOUR_OPENROUTER_KEY_HERE"
+ ],
+ "freellmapi_api_key": "PASTE_LOCAL_FREELLMAPI_KEY_IF_USED",
+ "nvidia_api_key": "PASTE_NVIDIA_NIM_KEY_IF_USED",
+ "fred_api_key": "PASTE_FRED_KEY_IF_USED",
+ "currents_api_key": "PASTE_CURRENTS_KEY_IF_USED",
+ "dashboard_auth_token": "GENERATE_A_LONG_RANDOM_TOKEN",
+ "assistant_name": "RIO",
+ "repo_agent": {
+  "_comment": "video/engine tuning lives here",
+  "video_encoder": "auto"
+ }
+}

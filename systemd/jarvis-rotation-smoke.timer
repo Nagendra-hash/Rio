@@ -1,0 +1,11 @@
+[Unit]
+Description=JARVIS — post-rotation smoke check, every 5 minutes
+
+[Timer]
+# Google rotates JARVIS's Live WebSocket ~every 10 min; 5 min keeps each
+# rotation window to one rotation (occasionally two).
+OnCalendar=*:0/5
+Persistent=true
+
+[Install]
+WantedBy=timers.target

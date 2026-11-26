@@ -1,0 +1,307 @@
+# config/voice_macros.yaml
+# Voice command macros - predefined sequences triggered by natural phrases
+
+macros:
+  good_morning:
+    trigger_phrases:
+      - "good morning"
+      - "morning"
+      - "start the day"
+    description: "Morning briefing with calendar, weather, and news"
+    steps:
+      - action: "calendar_control"
+        params:
+          command: "today"
+      - action: "web_search"
+        params:
+          query: "weather"
+          source: "weather"
+      - action: "news_briefing"
+        params:
+          topic: "general"
+      - action: "tts.speak"
+        params:
+          template: "Good morning! You have {{calendar.events_count}} events today. Weather is {{weather.summary}}. Here are the top headlines."
+
+  good_night:
+    trigger_phrases:
+      - "good night"
+      - "night"
+      - "sleep mode"
+    description: "Evening wind-down routine"
+    steps:
+      - action: "computer_settings"
+        params:
+          setting: "volume"
+          value: 20
+      - action: "music_player"
+        params:
+          command: "play"
+          query: "ambient sleep music"
+      - action: "timer"
+        params:
+          duration: "30 minutes"
+      - action: "tts.speak"
+        params:
+          template: "Good night! Playing sleep music for 30 minutes."
+
+  start_work:
+    trigger_phrases:
+      - "start work"
+      - "begin work"
+      - "work mode"
+      - "focus mode"
+    description: "Set up work environment"
+    steps:
+      - action: "computer_settings"
+        params:
+          setting: "focus_mode"
+          value: true
+      - action: "music_player"
+        params:
+          command: "play"
+          query: "focus music"
+          source: "jiosaavn"
+      - action: "timer"
+        params:
+          duration: "25 minutes"
+      - action: "tts.speak"
+        params:
+          template: "Work mode activated. Focus music playing. Pomodoro timer set for 25 minutes."
+
+  end_work:
+    trigger_phrases:
+      - "end work"
+      - "finish work"
+      - "done working"
+    description: "End work session"
+    steps:
+      - action: "computer_settings"
+        params:
+          setting: "focus_mode"
+          value: false
+      - action: "timer"
+        params:
+          command: "cancel"
+      - action: "music_player"
+        params:
+          command: "pause"
+      - action: "tts.speak"
+        params:
+          template: "Work session ended. Timer cancelled. Music paused."
+
+  deploy_app:
+    trigger_phrases:
+      - "deploy app"
+      - "deploy application"
+      - "push to production"
+    description: "Run tests, build, and deploy"
+    steps:
+      - action: "run_tests"
+        params: {}
+      - action: "repo_agent"
+        params:
+          command: "build"
+      - action: "repo_agent"
+        params:
+          command: "deploy"
+      - action: "tts.speak"
+        params:
+          template: "Deployment complete. {{deploy.status}}"
+
+  meeting_prep:
+    trigger_phrases:
+      - "prepare for meeting"
+      - "meeting prep"
+      - "get ready for meeting"
+    description: "Prepare for upcoming meeting"
+    steps:
+      - action: "calendar_control"
+        params:
+          command: "next_meeting"
+      - action: "knowledge_base"
+        params:
+          command: "search"
+          query: "{{meeting.topic}}"
+      - action: "gmail_control"
+        params:
+          command: "search"
+          query: "from:{{meeting.organizer}}"
+      - action: "tts.speak"
+        params:
+          template: "Meeting prep complete. Found {{kb.results_count}} relevant documents and {{email.results_count}} related emails."
+
+  workout_start:
+    trigger_phrases:
+      - "start workout"
+      - "begin exercise"
+      - "workout time"
+    description: "Start workout routine"
+    steps:
+      - action: "music_player"
+        params:
+          command: "play"
+          query: "workout music"
+      - action: "timer"
+        params:
+          duration: "45 minutes"
+      - action: "tts.speak"
+        params:
+          template: "Workout started. Music playing. Timer set for 45 minutes."
+
+  cooking_mode:
+    trigger_phrases:
+      - "cooking mode"
+      - "start cooking"
+      - "kitchen mode"
+    description: "Hands-free cooking assistant"
+    steps:
+      - action: "computer_settings"
+        params:
+          setting: "wake_lock"
+          value: true
+      - action: "music_player"
+        params:
+          command: "play"
+          query: "cooking music"
+      - action: "tts.speak"
+        params:
+          template: "Cooking mode activated. Screen will stay on. What are you cooking?"
+
+  movie_night:
+    trigger_phrases:
+      - "movie night"
+      - "film night"
+      - "watch movie"
+    description: "Set up for movie watching"
+    steps:
+      - action: "computer_settings"
+        params:
+          setting: "brightness"
+          value: 30
+      - action: "computer_settings"
+        params:
+          setting: "volume"
+          value: 80
+      - action: "video_player"
+        params:
+          command: "suggest"
+      - action: "tts.speak"
+        params:
+          template: "Movie night ready. Lights dimmed. Volume up. Here are some suggestions."
+
+  weekend_plan:
+    trigger_phrases:
+      - "plan weekend"
+      - "weekend plans"
+      - "what to do this weekend"
+    description: "Plan weekend activities"
+    steps:
+      - action: "calendar_control"
+        params:
+          command: "weekend"
+      - action: "web_search"
+        params:
+          query: "events near me this weekend"
+      - action: "weather"
+        params:
+          query: "weekend forecast"
+      - action: "tts.speak"
+        params:
+          template: "Weekend plan ready. You have {{calendar.events_count}} events. Weather looks {{weather.summary}}. Found {{events.results_count}} local events."
+
+  focus_break:
+    trigger_phrases:
+      - "take a break"
+      - "break time"
+      - "short break"
+    description: "Short break during work"
+    steps:
+      - action: "timer"
+        params:
+          duration: "5 minutes"
+      - action: "music_player"
+        params:
+          command: "pause"
+      - action: "tts.speak"
+        params:
+          template: "Break time! 5 minute timer started. Music paused. Stretch and relax."
+
+  lunch_break:
+    trigger_phrases:
+      - "lunch break"
+      - "lunch time"
+      - "take lunch"
+    description: "Lunch break routine"
+    steps:
+      - action: "timer"
+        params:
+          duration: "60 minutes"
+      - action: "music_player"
+        params:
+          command: "pause"
+      - action: "computer_settings"
+        params:
+          setting: "focus_mode"
+          value: false
+      - action: "tts.speak"
+        params:
+          template: "Lunch break! 60 minute timer. Focus mode off. Enjoy your meal."
+
+  quick_note:
+    trigger_phrases:
+      - "take a note"
+      - "make a note"
+      - "remember this"
+    description: "Quick voice note"
+    steps:
+      - action: "knowledge_base"
+        params:
+          command: "add_note"
+          content: "{{voice_input}}"
+      - action: "tts.speak"
+        params:
+          template: "Noted: {{voice_input}}"
+
+  read_emails:
+    trigger_phrases:
+      - "read emails"
+      - "check email"
+      - "any new mail"
+    description: "Check and summarize emails"
+    steps:
+      - action: "gmail_control"
+        params:
+          command: "recent"
+          count: 5
+      - action: "tts.speak"
+        params:
+          template: "You have {{email.count}} new emails. {{email.summary}}"
+
+  system_status:
+    trigger_phrases:
+      - "system status"
+      - "how is the system"
+      - "pc status"
+    description: "Get system health status"
+    steps:
+      - action: "system_info"
+        params:
+          command: "full"
+      - action: "tts.speak"
+        params:
+          template: "System status: CPU {{cpu.usage}}%, Memory {{memory.usage}}%, Disk {{disk.usage}}%. Uptime {{uptime}}."
+
+  backup_now:
+    trigger_phrases:
+      - "backup now"
+      - "run backup"
+      - "save backup"
+    description: "Trigger immediate backup"
+    steps:
+      - action: "backup"
+        params:
+          command: "run"
+      - action: "tts.speak"
+        params:
+          template: "Backup {{backup.status}}. {{backup.details}}"

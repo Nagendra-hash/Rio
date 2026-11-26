@@ -1,0 +1,8 @@
+name: jarvis-google-bridge
+description: >
+  Routes Gmail / Google Calendar asks that arrive on Telegram or WhatsApp into
+  Jarvis, which owns the OAuth'd Google skills (gmail_control, calendar_control)
+  and answers back on the same channel via `hermes send`. Observer only — never
+  blocks or rewrites gateway traffic.
+events:
+  - agent:end

@@ -1,0 +1,30 @@
+# webcam-no-autosuspend.rules — keep the built-in webcam out of USB autosuspend
+#
+# Why: this Inspiron's webcam (Integrated_Webcam_HD, 0c45:670b) keeps dropping
+# clean off the USB bus. The kernel then cannot enumerate it again — descriptor
+# reads fail with error -32 and "device not accepting address" — and the camera
+# stays gone until the laptop is fully powered off (observed 2026-10-16 20:47
+# drop, and 2026-10-17 00:24 drop that survived a reboot). Autosuspend reset
+# storms on this cheap EHCI hub (0000:00:1d.0) are the usual trigger; pinning
+# power/control to "on" for this one device stops the kernel suspending it.
+#
+# Install (needs root):
+#   sudo cp scripts/webcam-no-autosuspend.rules \
+#           /etc/udev/rules.d/50-jarvis-webcam.rules
+#   sudo udevadm control --reload-rules
+#
+# DO NOT run `udevadm trigger` here. Any trigger that re-enumerates this
+# camera can wedge it permanently — verified 2026-11-17 21:39:52: a
+# subsystem-wide `udevadm trigger --action=add --subsystem-match=usb` forced a
+# re-probe, the camera failed with error -32, and it never came back
+# (hub unbind/bind, PCI rescan and EHCI unbind/bind all failed to clear it;
+# only a full power-drain recovered it). The rule is enough on its own: it
+# applies on the next natural plug/re-probe or the next boot.
+#
+# Apply it to the running session without touching USB enumeration:
+#   echo on | sudo tee /sys/bus/usb/devices/1-1.5/power/control
+#
+# Verify once the camera is present again:
+#   cat /sys/bus/usb/devices/*/power/control   # the camera's line must say "on"
+#   ls -l /dev/video*                          # and the preview must stay up
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="0c45", ATTR{idProduct}=="670b", TEST=="power/control", ATTR{power/control}="on"

@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "description": "Cloud LLM budget configuration for JARVIS ModelRouter. Local models (ollama, local_qwen) are excluded from budgets.",
+  "daily_limits": {
+    "gemini": 200000,
+    "openrouter": 50000,
+    "nvidia": 100000,
+    "freellm": 100000,
+    "deepseek": 50000
+  },
+  "monthly_limits": {
+    "gemini": 5000000,
+    "openrouter": 1000000,
+    "nvidia": 2000000,
+    "freellm": 2000000,
+    "deepseek": 1000000
+  },
+  "per_request_cap": 8000,
+  "alert_thresholds": [0.5, 0.75, 0.9],
+  "hard_block_at": 1.0,
+  "exclude_local": true,
+  "token_cost_usd_per_1k": {
+    "gemini": 0.0,
+    "openrouter": 0.0,
+    "nvidia": 0.0,
+    "freellm": 0.0,
+    "deepseek": 0.0
+  }
+}

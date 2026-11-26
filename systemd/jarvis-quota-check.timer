@@ -1,0 +1,14 @@
+[Unit]
+Description=JARVIS — Gemini quota-reset check + flight URL regression, twice daily
+
+[Timer]
+# Local midnight (+30 min buffer for Google's counters to clear)
+OnCalendar=*-*-* 00:30:00
+# Midnight Pacific (Google's reset in PT; 12:30 IST during PDT — after US
+# DST ends in November the reset lands at 13:30 IST, so the second window
+# may report "still exhausted" for one extra hour until the local check)
+OnCalendar=*-*-* 12:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

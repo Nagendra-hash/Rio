@@ -1,0 +1,12 @@
+[Unit]
+Description=JARVIS — weekly backtest research tick (research only, no orders)
+
+[Timer]
+# Weekly, Sunday 02:30 local. The job itself checks the per-symbol interval
+# and the newest cached candle, so a missed week is caught up on the next boot.
+OnCalendar=Sun *-*-* 02:30:00
+Persistent=true
+RandomizedDelaySec=900
+
+[Install]
+WantedBy=timers.target

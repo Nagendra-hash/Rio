@@ -1,0 +1,72 @@
+{
+    "adaptive_memory": {
+        "can_write": true,
+        "collections": [
+            "personal_knowledge",
+            "web_knowledge",
+            "code_knowledge",
+            "screen_knowledge"
+        ]
+    },
+    "group_chat": {
+        "can_write": true,
+        "collections": [
+            "__all__"
+        ]
+    },
+    "hermes": {
+        "can_write": false,
+        "collections": [
+            "__all__"
+        ]
+    },
+    "legal_agent": {
+        "can_write": false,
+        "collections": [
+            "legal_docs"
+        ]
+    },
+    "metaquest_agent": {
+        "can_write": false,
+        "collections": [
+            "metaquest_docs"
+        ]
+    },
+    "rag_agent": {
+        "can_write": false,
+        "collections": [
+            "web_knowledge",
+            "research"
+        ]
+    },
+    "rag_learner": {
+        "can_write": true,
+        "collections": [
+            "web_knowledge"
+        ]
+    },
+    "scientific_agent": {
+        "can_write": true,
+        "collections": [
+            "research",
+            "study_library",
+            "web_knowledge",
+            "personal_knowledge"
+        ]
+    },
+    "sql_agent": {
+        "can_write": true,
+        "collections": [
+            "research",
+            "sql_reports"
+        ]
+    },
+    "study_agent": {
+        "can_write": false,
+        "collections": [
+            "study_library",
+            "personal_knowledge",
+            "research"
+        ]
+    }
+}

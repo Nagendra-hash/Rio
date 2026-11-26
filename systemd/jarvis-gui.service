@@ -1,0 +1,27 @@
+[Unit]
+Description=JARVIS — main application (GUI, voice, dashboard)
+# Starts with the graphical session, NOT at raw boot: JARVIS is a PyQt6 app
+# that needs DISPLAY/Wayland and audio devices, which only exist once you log
+# in to the desktop. (The ngrok tunnel unit is deliberately independent — it
+# tolerates the dashboard being down and will forward the moment JARVIS
+# appears.)
+#
+# Requires the user session manager to run at boot for a fully automatic
+# path:  sudo loginctl enable-linger nagendra
+#
+# Single-instance safety lives in jarvis_gui_wrapper.sh (pgrep + flock) so a
+# manually launched JARVIS and this unit can never fight over mic/audio.
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Mark-III
+ExecStart=%h/Mark-III/jarvis_gui_wrapper.sh
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical-session.target

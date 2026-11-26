@@ -1,0 +1,10 @@
+[Unit]
+Description=JARVIS — Gemini quota-reset check + flight URL regression (twice daily)
+
+[Service]
+Type=oneshot
+ExecStart=/home/nagendra/Mark-III/quota_check.sh
+# Headless safety: quota_check.sh also runs the flight-URL regression tests.
+# They are offline-only today, but with a DISPLAY set they could run their
+# --live browser tier without change if ever enabled.
+Environment=DISPLAY=:0

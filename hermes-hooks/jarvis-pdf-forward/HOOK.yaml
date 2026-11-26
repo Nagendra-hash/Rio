@@ -1,0 +1,8 @@
+name: jarvis-pdf-forward
+description: >
+  Forwards Telegram/WhatsApp documents with remember-intent ("remember this
+  document", "add to my library", …) into Jarvis's RAG ingestion inbox
+  (<jarvis>/scripts/jarvis_inbox.py). Observer only — never blocks or
+  rewrites gateway traffic.
+events:
+  - agent:end

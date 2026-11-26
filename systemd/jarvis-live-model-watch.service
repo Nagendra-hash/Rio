@@ -1,0 +1,13 @@
+[Unit]
+Description=JARVIS — probe failover Live model, flip back when recovered
+
+[Service]
+Type=oneshot
+ExecStart=/home/nagendra/Mark-III/systemd/jarvis-live-model-watch.sh
+# Results land in /tmp/jarvis_live_model_watch.log. A FAILED flip (rollback
+# path) leaves this unit failed until the next clean run — the alarm surface,
+# same convention as jarvis-rotation-smoke.service.
+Environment=DISPLAY=:0
+# Durable incident timeline: every probe outcome is appended to the JSONL log
+# (one JSON object per line) so incident history survives /tmp cleanups.
+Environment=JARVIS_LMW_INCIDENTS=/home/nagendra/Mark-III/memory/incidents.jsonl

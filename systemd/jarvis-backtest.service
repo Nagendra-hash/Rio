@@ -1,0 +1,16 @@
+[Unit]
+Description=JARVIS — weekly backtest research tick (research only, no orders)
+Documentation=file:/home/nagendra/Mark-III/BACKTEST_AGENT_OPERATIONS_GUIDE.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/nagendra/Mark-III
+ExecStart=/home/nagendra/Mark-III/.venv/bin/python /home/nagendra/Mark-III/scripts/backtest_run.py schedule --run
+Environment=PYTHONUNBUFFERED=1
+Environment=JARVIS_BACKTEST_AGENT=on
+# Bounded by config (max_workers=1, max_runtime_s=1800). A failed provider
+# leaves the job FAILED with a reason; nothing is retried more than twice.
+TimeoutStartSec=2400
+Nice=10
