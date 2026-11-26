@@ -102,10 +102,10 @@ def _gate(env_var: str) -> bool:
     # Fallback: read from the settings backend so a .env change takes effect
     # without needing to export the var in the running process.
     try:
-        from config.settings import get_settings
+        from config.settings import reload_settings
         # Map JARVIS_<NAME>_AGENT → agents.<name>_agent via pydantic nesting
         inner = env_var[len("JARVIS_"):-len("_AGENT")].lower()
-        gate_val = getattr(get_settings().agents, f"{inner}_agent", None)
+        gate_val = getattr(reload_settings().agents, f"{inner}_agent", None)
         if gate_val is not None:
             return bool(gate_val)
     except Exception:

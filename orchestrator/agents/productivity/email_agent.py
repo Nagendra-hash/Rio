@@ -28,10 +28,14 @@ All outbound text and all persisted payloads run through security.redact().
 from __future__ import annotations
 
 import logging
+import re
+from pathlib import Path
 
 from orchestrator.agents.productivity import email_logic, security
 from orchestrator.agents.productivity.checkpoint import \
     ProductivityCheckpoint
+from orchestrator.agents.productivity.drive_client import DriveClient
+from orchestrator.agents.productivity.gmail_client import GmailClient
 from orchestrator.agents.productivity.google_tools import (ToolError,
                                                            google_available)
 from orchestrator.agents.productivity.store import ProductivityStore
@@ -70,6 +74,53 @@ class EmailAgent(BaseAgent):
 
     def _svc(self):
         return self._service_factory()
+
+    # ── gmail / drive clients (lazy, so a missing token never breaks __init__) ─
+    _gmail_client = None
+    _drive_client = None
+
+    def _gmail(self):
+        if self._gmail_client is None:
+            self._gmail_client = GmailClient(self._svc())
+        return self._gmail_client
+
+    def _drive_svc(self):
+        from actions import _google_auth as ga
+        return ga.get_service("drive", "v3", [ga.DRIVE_SCOPE], "drive_token")
+
+    def _drive(self):
+        if self._drive_client is None:
+            self._drive_client = DriveClient(self._drive_svc())
+        return self._drive_client
+
+    @property
+    def gmail(self):
+        return self._gmail()
+
+    @property
+    def drive(self):
+        return self._drive()
+
+    def _check_drive_ready(self, request: AgentRequest) -> AgentResult | None:
+        if not google_available():
+            return self._reply(request, (
+                "The Google API libraries aren't installed. Run: "
+                "pip install google-api-python-client google-auth-oauthlib"),
+                action="not_installed")
+        try:
+            self._drive_svc()
+        except Exception as exc:
+            msg = str(exc)
+            if "setup" in msg.lower() or "consent" in msg.lower():
+                return self._reply(request,
+                                   "Google Drive needs one-time setup: save "
+                                   "client_secret.json in the config folder, "
+                                   "then ask me again to open consent.",
+                                   action="setup_needed")
+            return self._reply(request, f"Could not connect to Google Drive: "
+                                        f"{type(exc).__name__}.",
+                               action="connect_failed")
+        return None
 
     # ── entry point ───────────────────────────────────────────────────────
     def handle(self, request: AgentRequest) -> AgentResult:
@@ -515,7 +566,11 @@ class EmailAgent(BaseAgent):
                            action="move_to_inbox")
 
 
-    def _label_op(self, request: AgentRequest, op: str) -> AgentResult:
+    def _label_op(self, request: AgentRequest, op: str = "") -> AgentResult:
+        if not op:
+            op = str((request.metadata or {}).get("email_action") or "").strip().lower()
+        if op not in ("add_label", "remove_label"):
+            op = "add_label"
         blocked = self._connected(request)
         if blocked:
             return blocked
@@ -532,12 +587,11 @@ class EmailAgent(BaseAgent):
             result = func(ids, label)
             return self._reply(
                 request,
-                f'Applied "{result.get("added") or result.get("removed")}" '
-                f'{op.replace("_"," ").title()} on {result["updated"]} '
-                f'message(s).',
+                f"{'Added' if op == 'add_label' else 'Removed'} label "
+                f"“{label}” on {len(ids)} message(s).",
                 action=op)
         except Exception as exc:
-            return self._reply(request, f"Label {op} failed: {exc}",
+            return self._reply(request, f"Label operation failed: {exc}",
                                action=op, status=TaskStatus.FAILED)
 
 
@@ -902,7 +956,6 @@ class EmailAgent(BaseAgent):
         mid = str(meta.get("message_id") or "").strip()
         if mid:
             return mid
-        import re
         m = re.search(r"\b([A-Za-z0-9_-]{12,})\b", request.text or "")
         return m.group(1) if m else ""
 

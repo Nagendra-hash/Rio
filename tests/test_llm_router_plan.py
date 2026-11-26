@@ -29,13 +29,13 @@ import core.llm_router as R  # noqa: E402
 
 
 def test_mode_parsing() -> bool:
-    assert R._get_mode({}) == "smart"  # default
+    assert R._get_mode({}) == "free"  # default (safe: no paid-capable providers)
     assert R._get_mode({"router_mode": "free"}) == "free"
     assert R._get_mode({"router_mode": "GEMINI"}) == "gemini"  # case-insensitive
-    assert R._get_mode({"router_mode": "nonsense"}) == "smart"  # unknown → smart
+    assert R._get_mode({"router_mode": "nonsense"}) == "free"  # unknown → free (safe default)
     with patch.object(R.os, "environ", {"JARVIS_ROUTER_MODE": "local"}):
         assert R._get_mode({"router_mode": "free"}) == "local"  # env wins
-    print("✓ mode: env > config > default; unknown values fall back to smart")
+    print("✓ mode: env > config > default; unknown values fall back to free (safe)")
     return True
 
 

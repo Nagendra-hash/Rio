@@ -50,10 +50,22 @@ def _clean_music_state():
     mp._hud_queue_clear()
     mp._MUSIC_POPUP.update({"on": False, "service": "", "queue": [], "i": 0,
                             "label": ""})
+    try:
+        from dashboard import media_bus
+
+        media_bus.stop()
+    except Exception:
+        pass
     yield
     mp._hud_queue_clear()
     mp._MUSIC_POPUP.update({"on": False, "service": "", "queue": [], "i": 0,
                             "label": ""})
+    try:
+        from dashboard import media_bus
+
+        media_bus.stop()
+    except Exception:
+        pass
 
 
 def test_tool_declaration():
@@ -166,8 +178,9 @@ def test_jiosaavn_in_hud_stream_is_opt_in():
 
 
 def test_jiosaavn_fallback_search_page():
+    """No resolvable stream → the search page opens (last resort)."""
     opened = []
-    with patch.object(mp, "_saavn_song_url", return_value=("", "")), patch.object(
+    with patch.object(mp, "_saavn_pick", return_value=[]), patch.object(
         mp, "_open_web", side_effect=lambda url: opened.append(url) or True
     ):
         out = mp.music_player(
@@ -175,7 +188,7 @@ def test_jiosaavn_fallback_search_page():
         )
     assert opened == ["https://www.jiosaavn.com/search/zzz%20no%20such%20song"]
     assert "search" in out.lower()
-    print("✓ jiosaavn fallback: search page when API yields nothing")
+    print("✓ jiosaavn fallback: search page when no stream resolves")
     return True
 
 

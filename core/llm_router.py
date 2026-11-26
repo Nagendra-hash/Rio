@@ -360,11 +360,12 @@ def _load_router_config() -> list[dict]:
 
 
 def _get_mode(full_cfg: dict | None = None) -> str:
-    """router_mode: env override → config → 'smart'. Unknown values → smart."""
+    """router_mode: env override → config → 'free'. Unknown values → free (safe default:
+    never activate paid-capable providers unless explicitly authorized)."""
     cfg = full_cfg if full_cfg is not None else _load_full_config()
-    raw = os.environ.get("JARVIS_ROUTER_MODE") or (cfg.get("router_mode") or "smart")
+    raw = os.environ.get("JARVIS_ROUTER_MODE") or (cfg.get("router_mode") or "free")
     m = str(raw).strip().lower()
-    return m if m in _ROUTER_MODES else "smart"
+    return m if m in _ROUTER_MODES else "free"
 
 
 def _all_gemini_keys() -> list[str]:

@@ -212,12 +212,12 @@ class ModelRouter:
             (
                 os.environ.get("JARVIS_MODEL_ROUTER_MODE")
                 or os.environ.get("JARVIS_ROUTER_MODE")
-                or "smart"
+                or "free"
             )
             .strip()
             .lower()
         )
-        return raw if raw in ("local", "free", "smart", "gemini") else "smart"
+        return raw if raw in ("local", "free", "smart", "gemini") else "free"
 
     def _load_task_preferences(self) -> None:
         """Load task-specific preferred provider from config.

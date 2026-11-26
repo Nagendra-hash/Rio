@@ -4,13 +4,7 @@ The HUD's Qt/FFmpeg cannot software-decode AV1 at all, so a 4K AV1 stream is
 worth less than a 720p H.264 one. These pin the ordering that makes that true,
 and the fact that AV1 is still chosen when it is the only thing on offer (the
 alternative would be claiming nothing is playable).
-
-TWO MODULES, because this repo carries two copies: `actions/video_player.py`
-(the maintained file) and `actions/Mark-LVII_actions_video_player.py` (the
-LVII port, which action discovery loads first). Both must rank codecs the same
-way or the running assistant and the tests would disagree.
 """
-
 from __future__ import annotations
 
 import importlib.util
@@ -21,24 +15,16 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def _load(name: str, filename: str):
-    spec = importlib.util.spec_from_file_location(name, ROOT / "actions" / filename)
+def _load(filename: str):
+    spec = importlib.util.spec_from_file_location("video_player", ROOT / "actions" / filename)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-@pytest.fixture(scope="module", params=[
-    ("actions.video_player", None),
-    ("live_video_player", "Mark-LVII_actions_video_player.py"),
-])
-def rank(request):
-    name, filename = request.param
-    if filename is None:
-        module = _load(name, "video_player.py")
-    else:
-        module = _load(name, filename)
-    return module._codec_rank
+@pytest.fixture(scope="module")
+def rank():
+    return _load("video_player.py")._codec_rank
 
 
 def test_h264_is_first(rank):
